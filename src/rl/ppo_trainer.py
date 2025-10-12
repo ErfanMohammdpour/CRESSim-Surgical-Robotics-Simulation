@@ -92,16 +92,16 @@ class PPOTrainer:
         model = PPO(
             "CnnPolicy",  # Use CNN policy for image inputs
             self.env,
-            learning_rate=ppo_config.get("learning_rate", 1e-4),
-            n_steps=ppo_config.get("n_steps", 4096),
-            batch_size=ppo_config.get("batch_size", 128),
-            n_epochs=ppo_config.get("n_epochs", 8),
-            gamma=ppo_config.get("gamma", 0.995),
-            gae_lambda=ppo_config.get("gae_lambda", 0.95),
-            clip_range=ppo_config.get("clip_range", 0.15),
-            ent_coef=ppo_config.get("ent_coef", 0.005),
-            vf_coef=ppo_config.get("vf_coef", 0.3),
-            max_grad_norm=ppo_config.get("max_grad_norm", 0.5),
+            learning_rate=float(ppo_config.get("learning_rate", 1e-4)),
+            n_steps=int(ppo_config.get("n_steps", 4096)),
+            batch_size=int(ppo_config.get("batch_size", 128)),
+            n_epochs=int(ppo_config.get("n_epochs", 8)),
+            gamma=float(ppo_config.get("gamma", 0.995)),
+            gae_lambda=float(ppo_config.get("gae_lambda", 0.95)),
+            clip_range=float(ppo_config.get("clip_range", 0.15)),
+            ent_coef=float(ppo_config.get("ent_coef", 0.005)),
+            vf_coef=float(ppo_config.get("vf_coef", 0.3)),
+            max_grad_norm=float(ppo_config.get("max_grad_norm", 0.5)),
             verbose=1,
             device=self.device,
             tensorboard_log=str(self.log_dir / "tensorboard")
@@ -142,7 +142,7 @@ class PPOTrainer:
         
         # Train model
         self.model.learn(
-            total_timesteps=total_timesteps,
+            total_timesteps=int(total_timesteps),
             callback=callbacks,
             tb_log_name="ppo_suction_rl"
         )

@@ -201,15 +201,16 @@ def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], 
     paths = load_paths_config()
     train_config = load_config(config)
     
-    # Check Unity build (skip if using mock)
-    if not mock:
-        unity_build_path = Path(paths["unity_build"])
-        if not unity_build_path.exists():
-            console.print("[red]Error: Unity build not found![/red]")
-            console.print(f"Expected at: {unity_build_path}")
-            console.print("Please build the Unity environment first (see README)")
-            console.print("Or use --mock flag to use mock environment")
-            sys.exit(1)
+    # Check Unity build
+    unity_build_path = Path(paths["unity_build"])
+    if not mock and unity_build_path.exists():
+        console.print("[green]Using Unity environment for RL training[/green]")
+    elif not mock and not unity_build_path.exists():
+        console.print("[red]Error: Unity build not found![/red]")
+        console.print(f"Expected at: {unity_build_path}")
+        console.print("Please build the Unity environment first (see README)")
+        console.print("Or use --mock flag to use mock environment")
+        sys.exit(1)
     else:
         console.print("[yellow]Using mock environment for RL training[/yellow]")
     
