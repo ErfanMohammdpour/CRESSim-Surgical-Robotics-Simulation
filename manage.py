@@ -193,20 +193,25 @@ def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], d
 @click.option("--checkpoint", default=None, help="IL checkpoint to start from")
 @click.option("--output-dir", default=None, help="Output directory for checkpoints")
 @click.option("--timesteps", "-t", default=None, type=int, help="Total training timesteps")
-def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], timesteps: Optional[int]) -> None:
+@click.option("--mock", is_flag=True, help="Use mock environment (no Unity required)")
+def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], timesteps: Optional[int], mock: bool) -> None:
     """Train reinforcement learning (PPO) model with safety shield."""
-    console.print(Panel.fit("🤖 Training RL Model with Safety Shield", style="bold red"))
+    console.print(Panel.fit("Training RL Model with Safety Shield", style="bold red"))
     
     paths = load_paths_config()
     train_config = load_config(config)
     
-    # Check Unity build
-    unity_build_path = Path(paths["unity_build"])
-    if not unity_build_path.exists():
-        console.print("[red]Error: Unity build not found![/red]")
-        console.print(f"Expected at: {unity_build_path}")
-        console.print("Please build the Unity environment first (see README)")
-        sys.exit(1)
+    # Check Unity build (skip if using mock)
+    if not mock:
+        unity_build_path = Path(paths["unity_build"])
+        if not unity_build_path.exists():
+            console.print("[red]Error: Unity build not found![/red]")
+            console.print(f"Expected at: {unity_build_path}")
+            console.print("Please build the Unity environment first (see README)")
+            console.print("Or use --mock flag to use mock environment")
+            sys.exit(1)
+    else:
+        console.print("[yellow]Using mock environment for RL training[/yellow]")
     
     # Set default paths
     if output_dir is None:
@@ -215,14 +220,15 @@ def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], 
         train_config["total_timesteps"] = timesteps
     
     try:
-        from rl.train_loop import RLTrainer
-        trainer = RLTrainer(
+        from src.rl.ppo_trainer import PPOTrainer
+        trainer = PPOTrainer(
             config=train_config,
             checkpoint_path=checkpoint,
-            output_dir=output_dir
+            output_dir=output_dir,
+            mock=mock
         )
-        trainer.train()
-        console.print("[green]✅ RL training completed![/green]")
+        trainer.train(total_timesteps=total_timesteps)
+        console.print("[green]RL training completed![/green]")
     except Exception as e:
         console.print(f"[red]Failed to train RL model: {e}[/red]")
         sys.exit(1)
