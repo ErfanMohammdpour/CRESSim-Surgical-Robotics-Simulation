@@ -220,6 +220,9 @@ def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], 
     if timesteps is not None:
         train_config["total_timesteps"] = timesteps
     
+    # Get total timesteps from config
+    total_timesteps = train_config.get("total_timesteps", 1000000)
+    
     try:
         from src.rl.ppo_trainer import PPOTrainer
         trainer = PPOTrainer(
