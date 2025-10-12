@@ -21,7 +21,6 @@ from rich.table import Table
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from utils.io import load_config, ensure_dir
-from utils.log import setup_logging
 
 console = Console()
 
@@ -46,7 +45,9 @@ def cli(verbose: bool, config_dir: str) -> None:
     check_python_version()
     
     # Set up logging
-    setup_logging(verbose=verbose)
+    from src.utils.log import setup_logging
+    log_dir = Path("data/logs")
+    setup_logging(log_dir, level="DEBUG" if verbose else "INFO")
     
     # Store config dir globally
     os.environ["CONFIG_DIR"] = config_dir
