@@ -1,0 +1,43 @@
+# Safety shield configuration
+enabled: true
+
+# Distance thresholds
+d_safe: 0.05  # meters - minimum safe distance
+d_warning: 0.1  # meters - warning distance
+d_critical: 0.02  # meters - critical distance
+
+# Segmentation settings
+segmentation:
+  model_type: unet_tiny
+  input_size: [64, 64]
+  num_classes: 3  # background, tissue, dangerous_areas
+  threshold: 0.5
+  confidence_threshold: 0.8
+
+# Action projection
+action_projection:
+  enabled: true
+  scaling_factor: 0.5  # scale down actions when unsafe
+  max_scaling: 0.1     # minimum action scale
+  projection_method: scale  # scale or project
+
+# Safety monitoring
+monitoring:
+  violation_cooldown: 10  # steps before allowing new actions
+  max_violations_per_episode: 5
+  violation_penalty: -1.0
+  safety_reward: 0.1  # reward for staying safe
+
+# Proximity estimation
+proximity:
+  enabled: true
+  method: segmentation_based  # segmentation_based or depth_estimation
+  update_freq: 1  # every N steps
+  history_length: 5
+
+# Emergency stop
+emergency_stop:
+  enabled: true
+  critical_distance_threshold: 0.01
+  max_consecutive_violations: 3
+  reset_episode_on_stop: true
