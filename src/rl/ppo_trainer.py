@@ -119,27 +119,8 @@ class PPOTrainer:
         """Train the PPO model."""
         logger.info(f"Starting PPO training for {total_timesteps} timesteps...")
         
-        # Setup callbacks
+        # Setup callbacks (simplified for now)
         callbacks = []
-        
-        # Evaluation callback
-        eval_env = self._create_environment()
-        eval_callback = EvalCallback(
-            eval_env,
-            best_model_save_path=str(self.log_dir / "best_model"),
-            log_path=str(self.log_dir / "eval_logs"),
-            eval_freq=10000,
-            deterministic=True,
-            render=False
-        )
-        callbacks.append(eval_callback)
-        
-        # Stop training on reward threshold
-        stop_callback = StopTrainingOnRewardThreshold(
-            reward_threshold=0.8,
-            verbose=1
-        )
-        callbacks.append(stop_callback)
         
         # Train model
         self.model.learn(

@@ -5,8 +5,8 @@ device: cuda  # cuda or cpu
 # PPO hyperparameters (optimized for GPU)
 ppo:
   learning_rate: 1e-4  # lower for stability
-  n_steps: 4096  # increased for better samples
-  batch_size: 128  # increased for GPU
+  n_steps: 2048  # reduced for testing
+  batch_size: 64  # reduced for GPU memory
   n_epochs: 8  # reduced to prevent overfitting
   gamma: 0.995  # higher for long-term rewards
   gae_lambda: 0.95
@@ -53,7 +53,7 @@ vit_encoder:
   mlp_ratio: 4.0
 
 # Training settings (optimized for GPU)
-total_timesteps: 2000000  # more training
+total_timesteps: 100000  # reduced for testing
 eval_freq: 5000  # more frequent evaluation
 save_freq: 25000  # more frequent saving
 log_interval: 5  # more frequent logging
