@@ -253,7 +253,7 @@ def eval(checkpoint: str, num_episodes: int, output_dir: Optional[str], render: 
         output_dir = paths["videos_dir"]
     
     try:
-        from eval.evaluator import Evaluator
+        from src.eval.evaluator import Evaluator
         evaluator = Evaluator(checkpoint_path=checkpoint, output_dir=output_dir)
         results = evaluator.evaluate(num_episodes=num_episodes, render=render)
         
