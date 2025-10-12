@@ -145,6 +145,9 @@ class Evaluator:
             if render and frames is not None:
                 frame = self.env.render(mode='rgb_array')
                 if frame is not None:
+                    # Ensure frame is in correct format
+                    if frame.dtype != np.uint8:
+                        frame = (frame * 255).astype(np.uint8)
                     frames.append(frame)
         
         # Save video if rendering

@@ -249,6 +249,9 @@ class MockSuctionEnv(gym.Env):
         """Render the environment."""
         if mode == "rgb_array":
             return self._generate_observation()
+        elif mode == "human":
+            # For human viewing (optional)
+            return self._generate_observation()
         return None
     
     def close(self):
