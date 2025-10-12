@@ -2,380 +2,308 @@
 Behavior Cloning trainer for imitation learning.
 """
 
+import os
+import h5py
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
-import numpy as np
-from typing import Dict, Any, List, Tuple, Optional
-import logging
+from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
+from typing import Dict, Any, List, Tuple
+import logging
 from tqdm import tqdm
 import json
+from datetime import datetime
 
-from ..vision.encoders import create_encoder
-from ..utils.log import Logger
-from ..utils.io import ensure_dir, save_json
+from ..utils.gpu import get_device, optimize_for_gpu
+from ..vision.encoders import CNNEncoder
+from ..utils.log import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
 class DemoDataset(Dataset):
-    """
-    Dataset for loading demonstrations.
-    """
+    """Dataset for loading demonstration data."""
     
-    def __init__(
-        self, 
-        demos: List[Dict[str, Any]], 
-        weights: np.ndarray,
-        augment: bool = True
-    ):
-        self.demos = demos
-        self.weights = weights
-        self.augment = augment
+    def __init__(self, demos_path: str, image_size: Tuple[int, int] = (128, 128)):
+        self.demos_path = demos_path
+        self.image_size = image_size
+        self.observations = []
+        self.actions = []
         
-        # Flatten all transitions
-        self.transitions = []
-        self.transition_weights = []
+        self._load_data()
+    
+    def _load_data(self):
+        """Load demonstration data from HDF5 file."""
+        logger.info(f"Loading demos from {self.demos_path}")
         
-        for demo, weight in zip(demos, weights):
-            episode_length = demo['episode_length']
-            for i in range(episode_length):
-                self.transitions.append({
-                    'observation': demo['observations'][i],
-                    'action': demo['actions'][i],
-                    'reward': demo['rewards'][i],
-                    'info': demo['infos'][i]
-                })
-                self.transition_weights.append(weight)
+        with h5py.File(self.demos_path, 'r') as f:
+            episode_keys = [key for key in f.keys() if key.startswith('episode_')]
+            
+            for episode_key in episode_keys:
+                episode = f[episode_key]
+                obs = episode['observations'][:]
+                actions = episode['actions'][:]
+                
+                # Resize images if needed
+                if obs.shape[1:3] != self.image_size:
+                    obs_resized = []
+                    for img in obs:
+                        img_resized = torch.nn.functional.interpolate(
+                            torch.tensor(img).permute(2, 0, 1).unsqueeze(0).float(),
+                            size=self.image_size,
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(0).permute(1, 2, 0).numpy()
+                        obs_resized.append(img_resized)
+                    obs = np.array(obs_resized)
+                
+                self.observations.extend(obs)
+                self.actions.extend(actions)
         
-        self.transition_weights = np.array(self.transition_weights)
-        logger.info(f"Created dataset with {len(self.transitions)} transitions")
+        self.observations = np.array(self.observations)
+        self.actions = np.array(self.actions)
+        
+        logger.info(f"Loaded {len(self.observations)} samples")
+        logger.info(f"Observation shape: {self.observations.shape}")
+        logger.info(f"Action shape: {self.actions.shape}")
     
     def __len__(self):
-        return len(self.transitions)
+        return len(self.observations)
     
     def __getitem__(self, idx):
-        transition = self.transitions[idx]
-        weight = self.transition_weights[idx]
+        obs = torch.tensor(self.observations[idx], dtype=torch.float32).permute(2, 0, 1)  # HWC -> CHW
+        action = torch.tensor(self.actions[idx], dtype=torch.float32)
+        return obs, action
+
+
+class PolicyNetwork(nn.Module):
+    """Policy network for behavior cloning."""
+    
+    def __init__(self, encoder: nn.Module, hidden_dim: int = 512, action_dim: int = 5):
+        super().__init__()
+        self.encoder = encoder
+        self.action_dim = action_dim
         
-        # Extract observation components
-        obs = transition['observation']
-        image = torch.from_numpy(obs['image']).float() / 255.0
-        aux = torch.from_numpy(obs['aux']).float()
+        # Policy head
+        self.policy_head = nn.Sequential(
+            nn.Linear(encoder.output_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, action_dim)
+        )
         
-        # Extract action
-        action = torch.from_numpy(transition['action']).float()
-        
-        return {
-            'image': image,
-            'aux': aux,
-            'action': action,
-            'weight': weight
-        }
+        # Initialize weights
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.zeros_(m.bias)
+    
+    def forward(self, obs):
+        features = self.encoder(obs)
+        action = self.policy_head(features)
+        return action
 
 
 class BCTrainer:
-    """
-    Behavior Cloning trainer.
-    """
+    """Behavior Cloning trainer."""
     
-    def __init__(
-        self, 
-        config: Dict[str, Any], 
-        demos_dir: str, 
-        output_dir: str
-    ):
+    def __init__(self, config: Dict[str, Any], demos_dir: str, output_dir: str):
         self.config = config
-        self.demos_dir = Path(demos_dir)
-        self.output_dir = Path(output_dir)
-        ensure_dir(self.output_dir)
+        self.demos_dir = demos_dir
+        self.output_dir = output_dir
         
-        # Training parameters
-        self.learning_rate = config.get('learning_rate', 3e-4)
-        self.batch_size = config.get('batch_size', 64)
-        self.num_epochs = config.get('num_epochs', 100)
-        self.weight_decay = config.get('weight_decay', 1e-5)
-        self.grad_clip_norm = config.get('grad_clip_norm', 1.0)
+        # Setup device
+        self.device = get_device()
+        optimize_for_gpu()
         
-        # Model parameters
-        self.model_config = config.get('model', {})
-        self.hidden_dim = self.model_config.get('hidden_dim', 256)
+        # Setup logging
+        self.log_dir = Path(output_dir) / "logs" / "il"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        setup_logging(self.log_dir)
         
-        # Device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Using device: {self.device}")
+        # Load data
+        self.dataset = DemoDataset(
+            demos_path=Path(demos_dir) / "demos.h5",
+            image_size=tuple(config.get("image_size", [128, 128]))
+        )
         
-        # Initialize model
-        self.model = self._create_model()
-        self.optimizer = self._create_optimizer()
-        self.criterion = self._create_criterion()
+        # Create data loader
+        batch_size = config.get("batch_size", 64)
+        self.dataloader = DataLoader(
+            self.dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True if self.device.type == 'cuda' else False
+        )
         
-        # Logger
-        self.logger = Logger(str(self.output_dir), "bc_training")
+        # Create model
+        self._create_model()
+        
+        # Setup optimizer
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=config.get("learning_rate", 1e-4),
+            weight_decay=config.get("weight_decay", 1e-5)
+        )
+        
+        # Setup loss function
+        self.criterion = nn.MSELoss()
         
         # Training state
         self.epoch = 0
         self.best_loss = float('inf')
-        self.training_history = []
+        
+        logger.info(f"BCTrainer initialized on {self.device}")
+        logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
     
-    def _create_model(self) -> nn.Module:
-        """Create the behavior cloning model."""
+    def _create_model(self):
+        """Create the policy model."""
         # Create encoder
-        encoder = create_encoder(self.model_config)
-        
-        # Add action head
-        action_head = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dim // 2, 5)  # 5D action space
+        encoder_config = self.config.get("cnn_encoder", {})
+        self.encoder = CNNEncoder(
+            input_channels=3,
+            output_dim=self.config.get("hidden_dim", 512),
+            channels=encoder_config.get("channels", [32, 64, 128, 256]),
+            kernel_sizes=encoder_config.get("kernel_sizes", [3, 3, 3, 3]),
+            strides=encoder_config.get("strides", [2, 2, 2, 2]),
+            padding=encoder_config.get("padding", [1, 1, 1, 1])
         )
         
-        # Combine encoder and action head
-        model = nn.ModuleDict({
-            'encoder': encoder,
-            'action_head': action_head
-        })
-        
-        return model.to(self.device)
-    
-    def _create_optimizer(self) -> optim.Optimizer:
-        """Create optimizer."""
-        return optim.Adam(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay
+        # Create policy network
+        self.model = PolicyNetwork(
+            encoder=self.encoder,
+            hidden_dim=self.config.get("hidden_dim", 512),
+            action_dim=5  # [dx, dy, dz, dyaw, suction_toggle]
         )
+        
+        self.model = self.model.to(self.device)
     
-    def _create_criterion(self) -> nn.Module:
-        """Create loss criterion."""
-        return nn.MSELoss(reduction='none')
-    
-    def train(self, dagger: bool = False) -> None:
+    def train(self, dagger: bool = False):
         """Train the behavior cloning model."""
         logger.info("Starting behavior cloning training...")
         
-        # Load demonstrations
-        demos, weights = self._load_demos()
+        num_epochs = self.config.get("num_epochs", 100)
         
-        # Create dataset and dataloader
-        dataset = DemoDataset(demos, weights, augment=True)
-        dataloader = DataLoader(
-            dataset, 
-            batch_size=self.batch_size, 
-            shuffle=True, 
-            num_workers=4,
-            pin_memory=True
-        )
-        
-        # Training loop
-        for epoch in range(self.num_epochs):
+        for epoch in range(num_epochs):
             self.epoch = epoch
-            epoch_loss = self._train_epoch(dataloader)
+            train_loss = self._train_epoch()
             
-            # Logging
-            self.logger.log_scalar('train/loss', epoch_loss, epoch)
-            self.training_history.append(epoch_loss)
-            
-            # Validation
+            # Log progress
             if epoch % 10 == 0:
-                val_loss = self._validate(dataloader)
-                self.logger.log_scalar('val/loss', val_loss, epoch)
-                
-                # Save checkpoint
-                if val_loss < self.best_loss:
-                    self.best_loss = val_loss
-                    self._save_checkpoint(epoch, val_loss, is_best=True)
-                else:
-                    self._save_checkpoint(epoch, val_loss, is_best=False)
+                logger.info(f"Epoch {epoch}/{num_epochs}, Loss: {train_loss:.6f}")
             
-            # DAgger-lite (if enabled)
-            if dagger and epoch % 20 == 0 and epoch > 0:
-                self._dagger_update(demos, weights)
-            
-            logger.info(f"Epoch {epoch}/{self.num_epochs}, Loss: {epoch_loss:.4f}")
+            # Save checkpoint
+            if epoch % 50 == 0 or train_loss < self.best_loss:
+                self._save_checkpoint(epoch, train_loss)
+                if train_loss < self.best_loss:
+                    self.best_loss = train_loss
         
         # Save final model
-        self._save_checkpoint(self.num_epochs - 1, self.best_loss, is_best=True)
-        
-        # Generate training summary
-        self._generate_summary()
-        
-        self.logger.close()
-        logger.info("Behavior cloning training completed!")
+        self._save_checkpoint(epoch, train_loss, is_final=True)
+        logger.info("Training completed!")
     
-    def _load_demos(self) -> Tuple[List[Dict[str, Any]], np.ndarray]:
-        """Load demonstrations and weights."""
-        # Load weights
-        weights_file = self.demos_dir / "weights.npz"
-        if weights_file.exists():
-            weights_data = np.load(weights_file)
-            weights = weights_data['weights']
-        else:
-            logger.warning("Weights file not found, using uniform weights")
-            weights = np.ones(1000)  # Default weight
-        
-        # Load demos
-        demos_file = self.demos_dir / "filtered_demos.npz"
-        if demos_file.exists():
-            demos_data = np.load(demos_file, allow_pickle=True)
-            demos = demos_data['demos'].tolist()
-        else:
-            # Load from individual demo files
-            demo_files = list(self.demos_dir.glob("demos_*.npz"))
-            if not demo_files:
-                raise FileNotFoundError("No demo files found")
-            
-            demos = []
-            for demo_file in demo_files:
-                demo_data = np.load(demo_file, allow_pickle=True)
-                demos.extend(demo_data['demos'].tolist())
-        
-        logger.info(f"Loaded {len(demos)} demonstrations")
-        return demos, weights
-    
-    def _train_epoch(self, dataloader: DataLoader) -> float:
+    def _train_epoch(self) -> float:
         """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
         num_batches = 0
         
-        for batch in tqdm(dataloader, desc=f"Epoch {self.epoch}"):
-            # Move to device
-            image = batch['image'].to(self.device)
-            aux = batch['aux'].to(self.device)
-            action = batch['action'].to(self.device)
-            weight = batch['weight'].to(self.device)
+        for batch_idx, (obs, actions) in enumerate(tqdm(self.dataloader, desc=f"Epoch {self.epoch}")):
+            obs = obs.to(self.device)
+            actions = actions.to(self.device)
             
             # Forward pass
-            features = self.model['encoder'](image, aux)
-            pred_action = self.model['action_head'](features)
-            
-            # Calculate loss
-            loss = self.criterion(pred_action, action)
-            weighted_loss = (loss * weight.unsqueeze(1)).mean()
+            self.optimizer.zero_grad()
+            pred_actions = self.model(obs)
+            loss = self.criterion(pred_actions, actions)
             
             # Backward pass
-            self.optimizer.zero_grad()
-            weighted_loss.backward()
-            
-            # Gradient clipping
-            if self.grad_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
-            total_loss += weighted_loss.item()
+            total_loss += loss.item()
             num_batches += 1
         
-        return total_loss / num_batches
+        return total_loss / num_batches if num_batches > 0 else 0.0
     
-    def _validate(self, dataloader: DataLoader) -> float:
-        """Validate the model."""
-        self.model.eval()
-        total_loss = 0.0
-        num_batches = 0
-        
-        with torch.no_grad():
-            for batch in dataloader:
-                # Move to device
-                image = batch['image'].to(self.device)
-                aux = batch['aux'].to(self.device)
-                action = batch['action'].to(self.device)
-                weight = batch['weight'].to(self.device)
-                
-                # Forward pass
-                features = self.model['encoder'](image, aux)
-                pred_action = self.model['action_head'](features)
-                
-                # Calculate loss
-                loss = self.criterion(pred_action, action)
-                weighted_loss = (loss * weight.unsqueeze(1)).mean()
-                
-                total_loss += weighted_loss.item()
-                num_batches += 1
-        
-        return total_loss / num_batches
-    
-    def _dagger_update(self, demos: List[Dict[str, Any]], weights: np.ndarray) -> None:
-        """Perform DAgger-lite update."""
-        logger.info("Performing DAgger-lite update...")
-        
-        # Generate on-policy rollouts
-        new_demos = self._generate_on_policy_demos()
-        
-        # Add to existing demos
-        demos.extend(new_demos)
-        
-        # Recalculate weights
-        from .filter_weight import DemoProcessor
-        processor = DemoProcessor(self.config.get('filtering', {}))
-        _, new_weights = processor.process_demos(demos, str(self.demos_dir))
-        
-        logger.info(f"Added {len(new_demos)} on-policy demos")
-    
-    def _generate_on_policy_demos(self) -> List[Dict[str, Any]]:
-        """Generate on-policy demonstrations."""
-        # This would integrate with the environment
-        # For now, return empty list
-        return []
-    
-    def _save_checkpoint(self, epoch: int, loss: float, is_best: bool = False) -> None:
+    def _save_checkpoint(self, epoch: int, loss: float, is_final: bool = False):
         """Save model checkpoint."""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': loss,
-            'config': self.config
+            'config': self.config,
+            'timestamp': datetime.now().isoformat()
         }
         
-        # Save regular checkpoint
-        checkpoint_file = self.output_dir / f"checkpoint_epoch_{epoch}.pth"
-        torch.save(checkpoint, checkpoint_file)
+        if is_final:
+            checkpoint_path = Path(self.output_dir) / "best_il_model.pth"
+        else:
+            checkpoint_path = Path(self.output_dir) / f"il_checkpoint_epoch_{epoch}.pth"
         
-        # Save best checkpoint
-        if is_best:
-            best_file = self.output_dir / "best_model.pth"
-            torch.save(checkpoint, best_file)
-            logger.info(f"Saved best model at epoch {epoch} with loss {loss:.4f}")
+        torch.save(checkpoint, checkpoint_path)
+        logger.info(f"Checkpoint saved: {checkpoint_path}")
     
-    def _generate_summary(self) -> None:
-        """Generate training summary."""
-        summary = {
-            'final_loss': self.training_history[-1] if self.training_history else 0.0,
-            'best_loss': self.best_loss,
-            'num_epochs': len(self.training_history),
-            'training_history': self.training_history,
-            'config': self.config
-        }
-        
-        summary_file = self.output_dir / "training_summary.json"
-        save_json(summary, str(summary_file))
-        
-        logger.info(f"Training summary saved to {summary_file}")
-    
-    def load_checkpoint(self, checkpoint_path: str) -> None:
-        """Load model from checkpoint."""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.epoch = checkpoint['epoch']
-        self.best_loss = checkpoint['loss']
-        
-        logger.info(f"Loaded checkpoint from epoch {self.epoch} with loss {self.best_loss:.4f}")
-    
-    def predict(self, image: torch.Tensor, aux: torch.Tensor) -> torch.Tensor:
-        """Predict action for given observation."""
+    def evaluate(self, num_episodes: int = 10) -> Dict[str, float]:
+        """Evaluate the trained model."""
         self.model.eval()
         
-        with torch.no_grad():
-            features = self.model['encoder'](image, aux)
-            action = self.model['action_head'](features)
+        total_loss = 0.0
+        num_samples = 0
         
-        return action
+        with torch.no_grad():
+            for obs, actions in self.dataloader:
+                obs = obs.to(self.device)
+                actions = actions.to(self.device)
+                
+                pred_actions = self.model(obs)
+                loss = self.criterion(pred_actions, actions)
+                
+                total_loss += loss.item() * obs.size(0)
+                num_samples += obs.size(0)
+        
+        avg_loss = total_loss / num_samples if num_samples > 0 else 0.0
+        
+        return {
+            'mse_loss': avg_loss,
+            'rmse_loss': np.sqrt(avg_loss),
+            'num_samples': num_samples
+        }
+
+
+if __name__ == "__main__":
+    # Test BC trainer
+    config = {
+        "image_size": [128, 128],
+        "batch_size": 32,
+        "learning_rate": 1e-4,
+        "num_epochs": 10,
+        "hidden_dim": 256,
+        "cnn_encoder": {
+            "channels": [32, 64, 128, 256],
+            "kernel_sizes": [3, 3, 3, 3],
+            "strides": [2, 2, 2, 2],
+            "padding": [1, 1, 1, 1]
+        }
+    }
+    
+    trainer = BCTrainer(
+        config=config,
+        demos_dir="data/demos",
+        output_dir="data/checkpoints"
+    )
+    
+    trainer.train()
+    results = trainer.evaluate()
+    print(f"Evaluation results: {results}")

@@ -1,114 +1,75 @@
 """
-Logging utilities for training and evaluation.
+Logging utilities for the project.
 """
 
-import os
 import logging
-import sys
+import os
 from pathlib import Path
 from typing import Optional
+import json
 from datetime import datetime
-import torch
-from torch.utils.tensorboard import SummaryWriter
 
 
-def setup_logging(verbose: bool = False, log_dir: Optional[str] = None) -> None:
+def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     """Setup logging configuration."""
-    level = logging.DEBUG if verbose else logging.INFO
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Convert string level to logging constant
+    numeric_level = getattr(logging, level.upper(), logging.INFO)
     
     # Create formatter
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Setup console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    
     # Setup file handler
-    if log_dir is None:
-        log_dir = Path(__file__).parent.parent.parent / "data" / "logs"
-    
-    log_dir = Path(log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    log_file = log_dir / f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_file = log_dir / "training.log"
     file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(numeric_level)
     file_handler.setFormatter(formatter)
+    
+    # Setup console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(numeric_level)
+    console_handler.setFormatter(formatter)
     
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.addHandler(console_handler)
+    root_logger.setLevel(numeric_level)
     root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
     
     # Suppress some noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
 
-class Logger:
-    """Unified logger for training metrics."""
+def log_metrics(metrics: dict, log_dir: Path, step: Optional[int] = None) -> None:
+    """Log metrics to JSON file."""
+    log_dir.mkdir(parents=True, exist_ok=True)
     
-    def __init__(self, log_dir: str, name: str = "training"):
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # TensorBoard writer
-        self.tb_writer = SummaryWriter(self.log_dir / "tensorboard" / name)
-        
-        # CSV logger
-        self.csv_file = self.log_dir / f"{name}.csv"
-        self.csv_headers_written = False
-        
-        # Logger
-        self.logger = logging.getLogger(name)
+    # Add timestamp and step
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "step": step,
+        "metrics": metrics
+    }
     
-    def log_scalar(self, key: str, value: float, step: int) -> None:
-        """Log scalar value to TensorBoard and CSV."""
-        # TensorBoard
-        self.tb_writer.add_scalar(key, value, step)
-        
-        # CSV
-        self._write_csv_row({key: value, "step": step})
+    # Append to metrics file
+    metrics_file = log_dir / "metrics.jsonl"
+    with open(metrics_file, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
+
+def log_config(config: dict, log_dir: Path) -> None:
+    """Log configuration to JSON file."""
+    log_dir.mkdir(parents=True, exist_ok=True)
     
-    def log_scalars(self, metrics: dict, step: int) -> None:
-        """Log multiple scalars."""
-        for key, value in metrics.items():
-            self.log_scalar(key, value, step)
-    
-    def log_image(self, key: str, image: torch.Tensor, step: int) -> None:
-        """Log image to TensorBoard."""
-        self.tb_writer.add_image(key, image, step)
-    
-    def log_histogram(self, key: str, values: torch.Tensor, step: int) -> None:
-        """Log histogram to TensorBoard."""
-        self.tb_writer.add_histogram(key, values, step)
-    
-    def _write_csv_row(self, row: dict) -> None:
-        """Write row to CSV file."""
-        import csv
-        
-        # Write headers if first time
-        if not self.csv_headers_written:
-            with open(self.csv_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=row.keys())
-                writer.writeheader()
-            self.csv_headers_written = True
-        
-        # Append row
-        with open(self.csv_file, 'a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=row.keys())
-            writer.writerow(row)
-    
-    def close(self) -> None:
-        """Close all writers."""
-        self.tb_writer.close()
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+    config_file = log_dir / "config.json"
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Get a logger instance."""
+    return logging.getLogger(name)

@@ -166,7 +166,7 @@ def demos(num_episodes: Optional[int], workers: Optional[int], mock: bool) -> No
 @click.option("--dagger", is_flag=True, help="Enable DAgger-lite")
 def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], dagger: bool) -> None:
     """Train imitation learning (behavior cloning) model."""
-    console.print(Panel.fit("🎓 Training Imitation Learning Model", style="bold yellow"))
+    console.print(Panel.fit("Training Imitation Learning Model", style="bold yellow"))
     
     paths = load_paths_config()
     train_config = load_config(config)
@@ -178,10 +178,10 @@ def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], d
         output_dir = paths["checkpoints_dir"]
     
     try:
-        from il.bc_trainer import BCTrainer
+        from src.il.bc_trainer import BCTrainer
         trainer = BCTrainer(config=train_config, demos_dir=demos_dir, output_dir=output_dir)
         trainer.train(dagger=dagger)
-        console.print("[green]✅ IL training completed![/green]")
+        console.print("[green]IL training completed![/green]")
     except Exception as e:
         console.print(f"[red]Failed to train IL model: {e}[/red]")
         sys.exit(1)
