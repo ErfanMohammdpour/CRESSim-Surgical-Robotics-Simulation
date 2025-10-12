@@ -73,7 +73,9 @@ class PPOTrainer:
                 image_size=tuple(self.config.get("image_size", [128, 128])),
                 max_steps=self.config.get("max_episode_steps", 1000)
             )
-            return DummyVecEnv([lambda: env])
+            # Wrap with VecTransposeImage for proper image handling
+            from stable_baselines3.common.vec_env import VecTransposeImage
+            return VecTransposeImage(DummyVecEnv([lambda: env]))
         else:
             # Use Unity environment (when available)
             from ..envs.unity_env import UnitySuctionEnv
@@ -82,7 +84,7 @@ class PPOTrainer:
                 image_size=tuple(self.config.get("image_size", [128, 128])),
                 max_steps=self.config.get("max_episode_steps", 1000)
             )
-            return DummyVecEnv([lambda: env])
+            return VecTransposeImage(DummyVecEnv([lambda: env]))
     
     def _create_model(self):
         """Create PPO model."""
@@ -142,7 +144,7 @@ class PPOTrainer:
         
         # Train model
         self.model.learn(
-            total_timesteps=int(total_timesteps),
+            total_timesteps=total_timesteps,
             callback=callbacks,
             tb_log_name="ppo_suction_rl"
         )

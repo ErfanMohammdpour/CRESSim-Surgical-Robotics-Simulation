@@ -35,8 +35,8 @@ class MockSuctionEnv(gym.Env):
         
         # Action space: [dx, dy, dz, dyaw, suction_toggle]
         self.action_space = spaces.Box(
-            low=np.array([-0.1, -0.1, -0.1, -0.2, 0.0]),
-            high=np.array([0.1, 0.1, 0.1, 0.2, 1.0]),
+            low=np.array([-0.1, -0.1, -0.1, -0.2, 0.0], dtype=np.float32),
+            high=np.array([0.1, 0.1, 0.1, 0.2, 1.0], dtype=np.float32),
             dtype=np.float32
         )
         
