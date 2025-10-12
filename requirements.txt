@@ -1,5 +1,7 @@
-# Core ML/AI (PyTorch already installed on server)
-# torch, torchvision, torchaudio - already installed
+# Surgical Robotics Project Dependencies
+# PyTorch, CUDA already installed on server
+
+# Core ML/AI
 numpy>=1.24.0
 scipy>=1.10.0
 scikit-learn>=1.3.0
@@ -44,5 +46,5 @@ psutil>=5.9.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 
-# Windows-specific
+# Windows-specific (if needed)
 pywin32>=306; sys_platform == "win32"
