@@ -50,20 +50,25 @@ class Evaluator:
     
     def _load_model(self):
         """Load trained model from checkpoint."""
-        if not Path(self.checkpoint_path).exists():
-            raise FileNotFoundError(f"Checkpoint not found: {self.checkpoint_path}")
+        # Check if .zip file exists (stable-baselines3 format)
+        zip_path = Path(self.checkpoint_path)
+        if not zip_path.exists():
+            # Try with .zip extension
+            zip_path = Path(str(self.checkpoint_path).replace('.pth', '.zip'))
+            if not zip_path.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {self.checkpoint_path} or {zip_path}")
         
         try:
             # Try loading as stable-baselines3 model
             from stable_baselines3 import PPO
-            model = PPO.load(self.checkpoint_path, device=self.device)
-            logger.info("Loaded PPO model from stable-baselines3")
+            model = PPO.load(str(zip_path), device=self.device)
+            logger.info(f"Loaded PPO model from {zip_path}")
             return model
         except Exception as e:
             logger.warning(f"Failed to load as PPO model: {e}")
             # Try loading as PyTorch model
             try:
-                checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+                checkpoint = torch.load(str(zip_path), map_location=self.device)
                 logger.info("Loaded PyTorch model")
                 return checkpoint
             except Exception as e2:
