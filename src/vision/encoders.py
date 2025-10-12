@@ -51,14 +51,11 @@ class CNNEncoder(nn.Module):
             )
             in_channels = out_channels
         
-        # Calculate output size after convolutions
-        self.conv_output_size = self._get_conv_output_size()
-        
-        # Final projection layer
+        # Final projection layer (use adaptive pooling instead of calculating size)
         self.projection = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(self.conv_output_size, output_dim),
+            nn.Linear(channels[-1], output_dim),  # Use last channel size
             nn.ReLU() if activation == "relu" else nn.GELU(),
             nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         )
@@ -68,22 +65,7 @@ class CNNEncoder(nn.Module):
         
         logger.info(f"CNNEncoder created: {input_channels} -> {output_dim}")
         logger.info(f"Channels: {channels}")
-        logger.info(f"Conv output size: {self.conv_output_size}")
-    
-    def _get_conv_output_size(self) -> int:
-        """Calculate the output size after convolution layers."""
-        # Create a dummy input to calculate output size
-        dummy_input = torch.zeros(1, self.input_channels, 128, 128)
-        
-        with torch.no_grad():
-            x = dummy_input
-            for layer in self.encoder:
-                x = layer(x)
-            
-            # Calculate flattened size
-            conv_output_size = x.numel() // x.size(0)
-        
-        return conv_output_size
+        logger.info(f"Output channels: {channels[-1]}")
     
     def _init_weights(self, m):
         """Initialize weights."""
