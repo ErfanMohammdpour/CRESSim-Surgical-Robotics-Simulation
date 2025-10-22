@@ -16,9 +16,21 @@ from tqdm import tqdm
 import json
 from datetime import datetime
 
-from ..utils.gpu import get_device, optimize_for_gpu
 from ..vision.encoders import CNNEncoder
-from ..utils.log import setup_logging
+
+# GPU utilities
+def get_device():
+    """Get the best available device"""
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    else:
+        return torch.device('cpu')
+
+def optimize_for_gpu():
+    """Optimize PyTorch for GPU usage"""
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +139,6 @@ class BCTrainer:
         # Setup logging
         self.log_dir = Path(output_dir) / "logs" / "il"
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        setup_logging(self.log_dir)
         
         # Load data
         self.dataset = DemoDataset(
