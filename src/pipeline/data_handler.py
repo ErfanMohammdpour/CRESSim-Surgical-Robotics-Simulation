@@ -97,7 +97,7 @@ class DataHandler:
         masks_dir.mkdir(exist_ok=True)
         
         # Generate sample data
-        for i in range(100):  # 100 sample images
+        for i in range(500):  # 500 sample images for better training
             # Create synthetic surgical image
             img = self._create_synthetic_surgical_image(i)
             img_path = images_dir / f"image_{i:03d}.jpg"
@@ -111,58 +111,203 @@ class DataHandler:
         logger.info(f"✅ Sample dataset created with 100 images")
     
     def _create_synthetic_surgical_image(self, idx: int) -> Image.Image:
-        """Create synthetic surgical image"""
-        img = np.zeros((256, 256, 3), dtype=np.uint8)
+        """Create realistic synthetic surgical image"""
+        img = np.zeros((512, 512, 3), dtype=np.uint8)
         
-        # Background (dark surgical field)
-        img[:, :] = [20, 20, 30]
+        # Create realistic surgical field background
+        # Gradient from dark center to slightly lighter edges
+        y, x = np.ogrid[:512, :512]
+        center_x, center_y = 256, 256
+        dist = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+        max_dist = np.sqrt(256**2 + 256**2)
         
-        # Add surgical instruments
-        center_x, center_y = 128, 128
+        # Dark surgical field with subtle gradient
+        base_intensity = 15 + (dist / max_dist) * 10
+        img[:, :, 0] = base_intensity + np.random.normal(0, 2, (512, 512))  # Red
+        img[:, :, 1] = base_intensity + np.random.normal(0, 2, (512, 512))  # Green  
+        img[:, :, 2] = base_intensity + 5 + np.random.normal(0, 2, (512, 512))  # Blue (slightly brighter)
         
-        # Main surgical tool
-        tool_x = int(center_x + np.sin(idx * 0.1) * 30)
-        tool_y = int(center_y + np.cos(idx * 0.1) * 25)
-        tool_x = max(20, min(236, tool_x))
-        tool_y = max(20, min(236, tool_y))
+        # Add realistic tissue texture
+        tissue_noise = np.random.normal(0, 8, (512, 512))
+        for c in range(3):
+            img[:, :, c] = np.clip(img[:, :, c] + tissue_noise, 0, 255)
         
-        # Draw tool
-        cv2.circle(img, (tool_x, tool_y), 8, (255, 255, 255), -1)
-        cv2.circle(img, (tool_x, tool_y), 5, (0, 255, 0), -1)
+        # Add blood vessels (dark red lines)
+        for _ in range(np.random.randint(3, 8)):
+            start_x = np.random.randint(50, 462)
+            start_y = np.random.randint(50, 462)
+            end_x = np.random.randint(50, 462)
+            end_y = np.random.randint(50, 462)
+            
+            # Draw vessel as thick line
+            cv2.line(img, (start_x, start_y), (end_x, end_y), (40, 20, 20), np.random.randint(2, 5))
         
-        # Add liquid/blood simulation
-        liquid_alpha = max(0, 1.0 - idx * 0.01)
-        if liquid_alpha > 0:
-            liquid_color = [0, 100, 200]
-            liquid_region = img[center_x-20:center_x+20, center_y-20:center_y+20]
-            liquid_region[:] = liquid_region * (1 - liquid_alpha) + np.array(liquid_color) * liquid_alpha
+        # Add realistic surgical instruments
+        # Main suction tool
+        tool_angle = idx * 0.2
+        tool_x = int(center_x + np.cos(tool_angle) * 80)
+        tool_y = int(center_y + np.sin(tool_angle) * 60)
+        tool_x = max(50, min(462, tool_x))
+        tool_y = max(50, min(462, tool_y))
         
-        # Add noise for realism
-        noise = np.random.normal(0, 5, img.shape).astype(np.uint8)
-        img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        # Draw realistic suction tool
+        # Main body (metallic)
+        cv2.ellipse(img, (tool_x, tool_y), (12, 8), tool_angle * 180 / np.pi, 0, 360, (180, 180, 190), -1)
+        cv2.ellipse(img, (tool_x, tool_y), (12, 8), tool_angle * 180 / np.pi, 0, 360, (200, 200, 210), 2)
+        
+        # Suction tip (brighter metallic)
+        tip_x = int(tool_x + np.cos(tool_angle) * 20)
+        tip_y = int(tool_y + np.sin(tool_angle) * 15)
+        cv2.circle(img, (tip_x, tip_y), 4, (220, 220, 230), -1)
+        cv2.circle(img, (tip_x, tip_y), 4, (240, 240, 250), 1)
+        
+        # Add realistic blood/liquid pools
+        for _ in range(np.random.randint(2, 5)):
+            pool_x = np.random.randint(100, 412)
+            pool_y = np.random.randint(100, 412)
+            pool_size = np.random.randint(15, 35)
+            
+            # Create irregular blood pool
+            mask = np.zeros((512, 512), dtype=np.uint8)
+            cv2.circle(mask, (pool_x, pool_y), pool_size, 255, -1)
+            
+            # Add some irregularity
+            kernel = np.ones((5, 5), np.uint8)
+            mask = cv2.erode(mask, kernel, iterations=1)
+            mask = cv2.dilate(mask, kernel, iterations=1)
+            
+            # Apply blood color with transparency
+            blood_color = np.random.choice([(60, 20, 20), (80, 30, 30), (100, 40, 40)])
+            alpha = np.random.uniform(0.3, 0.7)
+            
+            for c in range(3):
+                img[:, :, c] = np.where(mask > 0, 
+                    img[:, :, c] * (1 - alpha) + blood_color[c] * alpha, 
+                    img[:, :, c])
+        
+        # Add tissue folds and wrinkles
+        for _ in range(np.random.randint(5, 12)):
+            fold_x = np.random.randint(50, 462)
+            fold_y = np.random.randint(50, 462)
+            fold_length = np.random.randint(20, 60)
+            fold_angle = np.random.uniform(0, 2 * np.pi)
+            
+            end_x = int(fold_x + np.cos(fold_angle) * fold_length)
+            end_y = int(fold_y + np.sin(fold_angle) * fold_length)
+            
+            # Draw subtle tissue fold
+            cv2.line(img, (fold_x, fold_y), (end_x, end_y), (25, 25, 35), 2)
+        
+        # Add realistic lighting effects
+        # Create spotlight effect
+        light_center_x = center_x + np.random.randint(-50, 50)
+        light_center_y = center_y + np.random.randint(-50, 50)
+        light_mask = np.zeros((512, 512), dtype=np.float32)
+        cv2.circle(light_mask, (light_center_x, light_center_y), 150, 1.0, -1)
+        light_mask = cv2.GaussianBlur(light_mask, (101, 101), 0)
+        
+        # Apply lighting
+        for c in range(3):
+            img[:, :, c] = np.clip(img[:, :, c] * (0.7 + 0.3 * light_mask), 0, 255)
+        
+        # Add realistic camera noise and artifacts
+        # Gaussian noise
+        noise = np.random.normal(0, 3, img.shape).astype(np.float32)
+        img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        
+        # Add some compression artifacts
+        if np.random.random() < 0.3:
+            # Simulate JPEG compression artifacts
+            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]]) * 0.1
+            for c in range(3):
+                img[:, :, c] = np.clip(cv2.filter2D(img[:, :, c].astype(np.float32), -1, kernel), 0, 255).astype(np.uint8)
+        
+        # Resize to standard size
+        img = cv2.resize(img, (256, 256))
         
         return Image.fromarray(img)
     
     def _create_synthetic_mask(self, idx: int) -> Image.Image:
-        """Create synthetic segmentation mask"""
+        """Create realistic synthetic segmentation mask"""
         mask = np.zeros((256, 256), dtype=np.uint8)
         
-        # Background: 0
-        # Tissue: 1
-        # Dangerous areas: 2
+        # Background: 0 (black)
+        # Healthy tissue: 1 (gray)
+        # Dangerous areas: 2 (white)
         
         center_x, center_y = 128, 128
         
-        # Tissue area
-        cv2.circle(mask, (center_x, center_y), 80, 1, -1)
+        # Create realistic tissue area with irregular shape
+        # Main tissue region
+        tissue_center_x = center_x + np.random.randint(-20, 20)
+        tissue_center_y = center_y + np.random.randint(-20, 20)
         
-        # Dangerous areas (random)
-        if np.random.random() < 0.3:
-            danger_x = center_x + np.random.randint(-50, 50)
-            danger_y = center_y + np.random.randint(-50, 50)
+        # Create irregular tissue boundary
+        tissue_points = []
+        num_points = 16
+        for i in range(num_points):
+            angle = (2 * np.pi * i) / num_points
+            radius = 60 + np.random.randint(-15, 20)
+            x = int(tissue_center_x + radius * np.cos(angle))
+            y = int(tissue_center_y + radius * np.sin(angle))
+            x = max(10, min(246, x))
+            y = max(10, min(246, y))
+            tissue_points.append([x, y])
+        
+        # Fill tissue area
+        tissue_points = np.array(tissue_points, dtype=np.int32)
+        cv2.fillPoly(mask, [tissue_points], 1)
+        
+        # Add tissue texture (small variations)
+        for _ in range(np.random.randint(3, 8)):
+            small_x = np.random.randint(50, 206)
+            small_y = np.random.randint(50, 206)
+            small_radius = np.random.randint(5, 15)
+            cv2.circle(mask, (small_x, small_y), small_radius, 1, -1)
+        
+        # Add dangerous areas (blood vessels, sensitive tissue)
+        num_danger_areas = np.random.randint(1, 4)
+        for _ in range(num_danger_areas):
+            danger_x = center_x + np.random.randint(-60, 60)
+            danger_y = center_y + np.random.randint(-60, 60)
             danger_x = max(20, min(236, danger_x))
             danger_y = max(20, min(236, danger_y))
-            cv2.circle(mask, (danger_x, danger_y), 15, 2, -1)
+            
+            # Create irregular dangerous area
+            danger_points = []
+            num_danger_points = 8
+            danger_radius = np.random.randint(8, 20)
+            
+            for i in range(num_danger_points):
+                angle = (2 * np.pi * i) / num_danger_points
+                radius = danger_radius + np.random.randint(-3, 5)
+                x = int(danger_x + radius * np.cos(angle))
+                y = int(danger_y + radius * np.sin(angle))
+                x = max(5, min(251, x))
+                y = max(5, min(251, y))
+                danger_points.append([x, y])
+            
+            danger_points = np.array(danger_points, dtype=np.int32)
+            cv2.fillPoly(mask, [danger_points], 2)
+        
+        # Add blood vessels as thin lines
+        for _ in range(np.random.randint(2, 6)):
+            start_x = np.random.randint(30, 226)
+            start_y = np.random.randint(30, 226)
+            end_x = np.random.randint(30, 226)
+            end_y = np.random.randint(30, 226)
+            
+            # Draw vessel as thick line
+            vessel_thickness = np.random.randint(2, 4)
+            cv2.line(mask, (start_x, start_y), (end_x, end_y), 2, vessel_thickness)
+        
+        # Add some noise to make it more realistic
+        noise_mask = np.random.random((256, 256)) < 0.02
+        mask[noise_mask] = np.random.choice([0, 1, 2], size=np.sum(noise_mask))
+        
+        # Apply slight blur to make boundaries more realistic
+        mask = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)
+        mask = np.round(mask).astype(np.uint8)
         
         return Image.fromarray(mask)
     
