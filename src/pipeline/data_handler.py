@@ -40,25 +40,42 @@ class DataHandler:
         logger.info("DataHandler initialized")
     
     def download_kaggle_dataset(self) -> bool:
-        """Download dataset from Kaggle"""
-        logger.info("📥 Downloading dataset from Kaggle...")
+        """Download dataset from official source"""
+        logger.info("📥 Downloading dataset from official source...")
         
         try:
-            # Try using kaggle API
-            import kaggle
-            kaggle.api.dataset_download_files(
-                self.kaggle_dataset, 
-                path=str(self.raw_data_dir), 
-                unzip=True
-            )
-            logger.info("✅ Dataset downloaded successfully from Kaggle")
+            # Try direct download from official source
+            import requests
+            import zipfile
+            
+            dataset_url = "https://datasets.simula.no/downloads/kvasir-seg.zip"
+            zip_path = self.raw_data_dir / "kvasir-seg.zip"
+            
+            logger.info(f"Downloading from: {dataset_url}")
+            
+            # Download the dataset
+            response = requests.get(dataset_url, stream=True)
+            response.raise_for_status()
+            
+            with open(zip_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            # Extract the dataset
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(self.raw_data_dir)
+            
+            # Remove zip file
+            zip_path.unlink()
+            
+            logger.info("✅ Dataset downloaded successfully from official source")
             return True
             
         except ImportError:
-            logger.warning("Kaggle API not available, trying alternative download...")
+            logger.warning("Required packages not available, trying alternative download...")
             return self._download_alternative()
         except Exception as e:
-            logger.error(f"Kaggle download failed: {e}")
+            logger.error(f"Official download failed: {e}")
             return self._download_alternative()
     
     def _download_alternative(self) -> bool:
@@ -153,9 +170,24 @@ class DataHandler:
         """Process dataset and split into train/validation"""
         logger.info("🔄 Processing and splitting dataset...")
         
-        # Get all image files
-        images_dir = self.raw_data_dir / "images"
-        masks_dir = self.raw_data_dir / "masks"
+        # Check if real dataset exists first
+        real_images_dir = self.output_dir / "kvasir_seg" / "Kvasir-SEG" / "images"
+        real_masks_dir = self.output_dir / "kvasir_seg" / "Kvasir-SEG" / "masks"
+        
+        # Also check if dataset was downloaded to raw_data_dir
+        if not real_images_dir.exists():
+            real_images_dir = self.raw_data_dir / "Kvasir-SEG" / "images"
+            real_masks_dir = self.raw_data_dir / "Kvasir-SEG" / "masks"
+        
+        if real_images_dir.exists() and real_masks_dir.exists():
+            logger.info("📁 Using real Kvasir-SEG dataset")
+            images_dir = real_images_dir
+            masks_dir = real_masks_dir
+        else:
+            logger.info("📁 Using synthetic dataset")
+            # Get all image files
+            images_dir = self.raw_data_dir / "images"
+            masks_dir = self.raw_data_dir / "masks"
         
         image_files = list(images_dir.glob("*.jpg"))
         mask_files = list(masks_dir.glob("*.jpg"))
@@ -167,7 +199,13 @@ class DataHandler:
         # Match images with masks
         matched_pairs = []
         for img_file in image_files:
-            mask_file = masks_dir / f"mask_{img_file.stem.split('_')[1]}.jpg"
+            # For real dataset, mask has same name as image
+            if real_images_dir.exists():
+                mask_file = masks_dir / img_file.name
+            else:
+                # For synthetic dataset, mask has different naming
+                mask_file = masks_dir / f"mask_{img_file.stem.split('_')[1]}.jpg"
+            
             if mask_file.exists():
                 matched_pairs.append((img_file, mask_file))
         

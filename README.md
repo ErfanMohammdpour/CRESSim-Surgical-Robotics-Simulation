@@ -66,7 +66,7 @@ python run_pipeline.py
 ```
 
 **What this does:**
-- ✅ Downloads Kvasir-SEG dataset from Kaggle
+- ✅ Downloads Kvasir-SEG dataset from official source (https://datasets.simula.no/downloads/kvasir-seg.zip)
 - ✅ Processes and splits data into train/validation sets
 - ✅ Trains Imitation Learning (IL) model on training data
 - ✅ Trains Reinforcement Learning (RL) model on training data
