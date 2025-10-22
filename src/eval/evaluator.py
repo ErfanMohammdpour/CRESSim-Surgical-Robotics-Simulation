@@ -97,8 +97,20 @@ class Evaluator:
             if episode_result['success']:
                 success_count += 1
             
-            logger.info(f"Episode {episode + 1}: Reward={episode_result['total_reward']:.3f}, "
+            # Get detailed info
+            info = episode_result['final_info']
+            liquid_reduction = info.get('liquid_reduction', 0) * 100
+            contaminant_reduction = info.get('contaminant_reduction', 0) * 100
+            liquid_mass = info.get('liquid_mass', 0)
+            contaminant_mass = info.get('contaminant_mass', 0)
+            collisions = info.get('collision_count', 0)
+            safety_violations = info.get('safety_violations', 0)
+            
+            logger.info(f"Episode {episode + 1}: Reward={episode_result['total_reward']:.1f}, "
                        f"Length={episode_result['episode_length']}, Success={episode_result['success']}")
+            logger.info(f"  Liquid: {liquid_mass:.1f}kg ({liquid_reduction:.1f}% removed)")
+            logger.info(f"  Contaminant: {contaminant_mass:.1f}kg ({contaminant_reduction:.1f}% removed)")
+            logger.info(f"  Collisions: {collisions}, Safety violations: {safety_violations}")
         
         # Calculate summary statistics
         summary = self._calculate_summary_stats(

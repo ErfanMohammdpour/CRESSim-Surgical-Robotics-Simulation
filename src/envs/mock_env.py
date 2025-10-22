@@ -127,12 +127,22 @@ class MockSuctionEnv(gym.Env):
         """Simulate task-specific dynamics."""
         # Simulate liquid removal based on suction
         if self.suction_active:
-            # Liquid removal rate depends on position and suction strength
-            removal_rate = 0.1 * np.exp(-np.linalg.norm(self.position) * 0.1)
+            # Base removal rate
+            base_removal = 0.2  # Increased from 0.1
+            
+            # Position factor (closer to center = better)
+            center_distance = np.linalg.norm(self.position)
+            position_factor = np.exp(-center_distance * 0.05)  # Less sensitive to distance
+            
+            # Suction strength factor
+            suction_strength = 1.0  # Can be modified based on action[4]
+            
+            # Final removal rate
+            removal_rate = base_removal * position_factor * suction_strength
             self.liquid_mass = max(0, self.liquid_mass - removal_rate)
             
             # Contaminant removal (slower than liquid)
-            contaminant_removal = removal_rate * 0.5
+            contaminant_removal = removal_rate * 0.7  # Increased from 0.5
             self.contaminant_mass = max(0, self.contaminant_mass - contaminant_removal)
         
         # Simulate collisions (random for mock)
