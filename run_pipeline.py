@@ -25,7 +25,7 @@ def main():
         print("📚 Training IL model...")
         print("🤖 Training RL model...")
         print("📊 Evaluating models...")
-        print("🧹 Cleaning up...")
+        print("📁 Preserving data...")
         
         result = subprocess.run([
             sys.executable, "-c", """
@@ -42,7 +42,7 @@ success = pipeline.run_complete_pipeline(il_epochs=50, rl_timesteps=50000)
 if success:
     print('\\n🎉 Pipeline completed successfully!')
     print('📁 Results saved in data/results/')
-    print('🧹 Temporary files cleaned up')
+    print('📁 Data preserved in data/')
 else:
     print('\\n❌ Pipeline failed!')
     sys.exit(1)
