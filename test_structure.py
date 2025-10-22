@@ -62,9 +62,6 @@ def test_basic_imports():
     print("=" * 30)
     
     try:
-        # Add src to path
-        sys.path.insert(0, str(Path.cwd() / "src"))
-        
         # Test basic Python imports
         import json
         print("✅ json imported")
@@ -74,6 +71,9 @@ def test_basic_imports():
         
         from pathlib import Path
         print("✅ pathlib imported")
+        
+        # Add src to path
+        sys.path.insert(0, str(Path.cwd() / "src"))
         
         # Test if we can import the modules (even if they fail later)
         try:
