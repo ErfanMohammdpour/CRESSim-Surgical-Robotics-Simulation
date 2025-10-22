@@ -1,20 +1,12 @@
-# File paths configuration
-data_dir: ./data
-sim_dir: ./sim/CRESSim
-unity_build: ./sim/CRESSim/Build/SuctionEnv.exe
-
-# Dataset paths
-kvasir_seg_dir: ./data/kvasir_seg
-endoscapes_dir: ./data/endoscapes
-cholec80_dir: ./data/cholec80
-
-# Output paths
-demos_dir: ./data/demos
-logs_dir: ./data/logs
-videos_dir: ./data/videos
-checkpoints_dir: ./data/checkpoints
-benchmarks_dir: ./data/benchmarks
-
-# Logging
-tensorboard_dir: ./data/logs/tensorboard
-csv_logs_dir: ./data/logs/csv
+# Paths configuration
+data_dir: "data"
+sim_dir: "sim"
+unity_build: "sim/CRESSim/Builds/SuctionEnv.x86_64"
+kvasir_seg_dir: "data/kvasir_seg"
+demos_dir: "data/demos"
+checkpoints_dir: "data/checkpoints"
+logs_dir: "data/logs"
+videos_dir: "data/videos"
+benchmarks_dir: "data/benchmarks"
+models_dir: "data/models"
+eval_dir: "data/eval"

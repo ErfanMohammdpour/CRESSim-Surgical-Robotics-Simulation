@@ -1,6 +1,13 @@
 # Training configuration
 algorithm: ppo  # ppo or sac
-device: cuda  # cuda or cpu
+device: "auto"  # auto|cpu|cuda
+amp: true  # enable autocast + GradScaler
+cudnn_benchmark: true  # true for variable input sizes; set false if reproducibility priority
+deterministic: false  # if true, set torch.backends.cudnn.deterministic = True
+float32_matmul_precision: "high"  # high|medium|highest (torch 2.x)
+compile: false  # optional: torch.compile for speed
+gpu_memory_fraction: 1.0
+num_workers: 4  # DataLoader workers (0-2 on Windows, 4+ on Linux)
 
 # PPO hyperparameters (optimized for GPU)
 ppo:

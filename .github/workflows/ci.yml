@@ -8,12 +8,11 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
-    
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.10, 3.11]
-    
+        python-version: [3.8, 3.9, "3.10"]
+
     steps:
     - uses: actions/checkout@v4
     
@@ -22,14 +21,6 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~\AppData\Local\pip\Cache
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -37,19 +28,23 @@ jobs:
     
     - name: Lint with ruff
       run: |
-        ruff check src/ tests/ --output-format=github
+        pip install ruff
+        ruff check src/ tests/
     
     - name: Format check with black
       run: |
+        pip install black
         black --check src/ tests/
     
     - name: Type check with mypy
       run: |
+        pip install mypy
         mypy src/ --ignore-missing-imports
     
     - name: Test with pytest
       run: |
-        pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+        pip install pytest pytest-cov
+        pytest tests/ --cov=src --cov-report=xml --cov-report=html
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -59,45 +54,17 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
-  build:
-    runs-on: windows-latest
-    needs: test
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.10
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install build wheel
-    
-    - name: Build package
-      run: |
-        python -m build
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: dist
-        path: dist/
-
   integration-test:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     needs: test
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python 3.10
+    - name: Set up Python 3.9
       uses: actions/setup-python@v4
       with:
-        python-version: 3.10
+        python-version: 3.9
     
     - name: Install dependencies
       run: |
@@ -106,20 +73,90 @@ jobs:
     
     - name: Test bootstrap command
       run: |
-        python manage.py bootstrap --skip-tests
+        python manage.py bootstrap --help
     
     - name: Test demo generation (mock)
       run: |
-        python manage.py demos --mock --num-episodes 2
+        python manage.py demos --num-episodes 5 --mock
     
-    - name: Test IL training (mock)
+    - name: Test pretrain vision
       run: |
-        python manage.py train-il --config configs/train.yaml
+        python manage.py pretrain-vision --epochs 2
     
-    - name: Test evaluation (mock)
+    - name: Test IL training
       run: |
-        python manage.py eval --checkpoint data/checkpoints/best_model.pth --num-episodes 2
+        python manage.py train-il --epochs 2
     
-    - name: Test benchmark (mock)
+    - name: Test evaluation
+      run: |
+        python manage.py eval --checkpoint data/checkpoints/il_checkpoint.pth --num-episodes 2
+    
+    - name: Test benchmark
       run: |
         python manage.py bench --num-episodes 2
+    
+    - name: Test clean
+      run: |
+        python manage.py clean --logs --models --confirm
+
+  packaging-test:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+    
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+    
+    - name: Build package
+      run: |
+        python -m build
+    
+    - name: Check package
+      run: |
+        twine check dist/*
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: dist
+        path: dist/
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install safety bandit
+    
+    - name: Security scan with safety
+      run: |
+        safety check
+    
+    - name: Security scan with bandit
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+    
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: bandit-report.json

@@ -32,6 +32,32 @@ def check_python_version() -> None:
         sys.exit(1)
 
 
+def update_config_with_cli_overrides(config: dict, device: str, no_amp: bool, compile: bool, 
+                                    num_workers: Optional[int], gpu_mem_fraction: float) -> dict:
+    """Update config with CLI overrides."""
+    # Device setting
+    if device != "auto":
+        config["device"] = device
+    
+    # AMP setting
+    if no_amp:
+        config["amp"] = False
+    
+    # Compile setting
+    if compile:
+        config["compile"] = True
+    
+    # Number of workers
+    if num_workers is not None:
+        config["num_workers"] = num_workers
+    
+    # GPU memory fraction
+    if gpu_mem_fraction != 1.0:
+        config["gpu_memory_fraction"] = gpu_mem_fraction
+    
+    return config
+
+
 def load_paths_config() -> dict:
     """Load paths configuration."""
     return load_config("configs/paths.yaml")
@@ -56,9 +82,33 @@ def cli(verbose: bool, config_dir: str) -> None:
 @cli.command()
 @click.option("--force", "-f", is_flag=True, help="Force re-download/re-clone")
 @click.option("--skip-tests", is_flag=True, help="Skip running tests")
-def bootstrap(force: bool, skip_tests: bool) -> None:
+@click.option("--device", type=click.Choice(["auto", "cuda", "cpu"]), default="auto", help="Device to use")
+@click.option("--no-amp", is_flag=True, help="Disable Automatic Mixed Precision")
+@click.option("--compile", is_flag=True, help="Enable torch.compile for speed")
+@click.option("--num-workers", type=int, default=None, help="Number of DataLoader workers")
+@click.option("--gpu-mem-fraction", type=float, default=1.0, help="GPU memory fraction to use")
+def bootstrap(force: bool, skip_tests: bool, device: str, no_amp: bool, compile: bool, 
+              num_workers: Optional[int], gpu_mem_fraction: float) -> None:
     """Bootstrap the environment: install deps, download datasets, clone simulator."""
     console.print(Panel.fit("Bootstrapping CRESSim Suction RL", style="bold blue"))
+    
+    # Load and update configuration with CLI overrides
+    train_config = load_config("configs/train.yaml")
+    train_config = update_config_with_cli_overrides(
+        train_config, device, no_amp, compile, num_workers, gpu_mem_fraction
+    )
+    
+    # Log device configuration
+    from utils.device import cuda_info_string
+    console.print(f"[cyan]Device: {device}[/cyan]")
+    console.print(f"[cyan]AMP: {not no_amp}[/cyan]")
+    console.print(f"[cyan]Compile: {compile}[/cyan]")
+    console.print(f"[cyan]Workers: {num_workers or 'auto'}[/cyan]")
+    console.print(f"[cyan]GPU Memory Fraction: {gpu_mem_fraction}[/cyan]")
+    
+    if device in ["auto", "cuda"]:
+        console.print(f"[cyan]CUDA Info:[/cyan]")
+        console.print(cuda_info_string())
     
     paths = load_paths_config()
     
@@ -165,12 +215,23 @@ def demos(num_episodes: Optional[int], workers: Optional[int], mock: bool) -> No
 @click.option("--demos-dir", default=None, help="Directory containing demos")
 @click.option("--output-dir", default=None, help="Output directory for checkpoints")
 @click.option("--dagger", is_flag=True, help="Enable DAgger-lite")
-def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], dagger: bool) -> None:
+@click.option("--device", type=click.Choice(["auto", "cuda", "cpu"]), default="auto", help="Device to use")
+@click.option("--no-amp", is_flag=True, help="Disable Automatic Mixed Precision")
+@click.option("--compile", is_flag=True, help="Enable torch.compile for speed")
+@click.option("--num-workers", type=int, default=None, help="Number of DataLoader workers")
+@click.option("--gpu-mem-fraction", type=float, default=1.0, help="GPU memory fraction to use")
+def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], dagger: bool,
+             device: str, no_amp: bool, compile: bool, num_workers: Optional[int], gpu_mem_fraction: float) -> None:
     """Train imitation learning (behavior cloning) model."""
     console.print(Panel.fit("Training Imitation Learning Model", style="bold yellow"))
     
     paths = load_paths_config()
     train_config = load_config(config)
+    
+    # Update config with CLI overrides
+    train_config = update_config_with_cli_overrides(
+        train_config, device, no_amp, compile, num_workers, gpu_mem_fraction
+    )
     
     # Set default paths
     if demos_dir is None:
@@ -194,12 +255,23 @@ def train_il(config: str, demos_dir: Optional[str], output_dir: Optional[str], d
 @click.option("--output-dir", default=None, help="Output directory for checkpoints")
 @click.option("--timesteps", "-t", default=None, type=int, help="Total training timesteps")
 @click.option("--mock", is_flag=True, help="Use mock environment (no Unity required)")
-def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], timesteps: Optional[int], mock: bool) -> None:
+@click.option("--device", type=click.Choice(["auto", "cuda", "cpu"]), default="auto", help="Device to use")
+@click.option("--no-amp", is_flag=True, help="Disable Automatic Mixed Precision")
+@click.option("--compile", is_flag=True, help="Enable torch.compile for speed")
+@click.option("--num-workers", type=int, default=None, help="Number of DataLoader workers")
+@click.option("--gpu-mem-fraction", type=float, default=1.0, help="GPU memory fraction to use")
+def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], timesteps: Optional[int], mock: bool,
+             device: str, no_amp: bool, compile: bool, num_workers: Optional[int], gpu_mem_fraction: float) -> None:
     """Train reinforcement learning (PPO) model with safety shield."""
     console.print(Panel.fit("Training RL Model with Safety Shield", style="bold red"))
     
     paths = load_paths_config()
     train_config = load_config(config)
+    
+    # Update config with CLI overrides
+    train_config = update_config_with_cli_overrides(
+        train_config, device, no_amp, compile, num_workers, gpu_mem_fraction
+    )
     
     # Check Unity build
     unity_build_path = Path(paths["unity_build"])
@@ -243,27 +315,49 @@ def train_rl(config: str, checkpoint: Optional[str], output_dir: Optional[str], 
 @click.option("--num-episodes", "-n", default=10, help="Number of evaluation episodes")
 @click.option("--output-dir", default=None, help="Output directory for results")
 @click.option("--render", is_flag=True, help="Render videos during evaluation")
-def eval(checkpoint: str, num_episodes: int, output_dir: Optional[str], render: bool) -> None:
+@click.option("--mock", is_flag=True, help="Use mock environment (no Unity required)")
+@click.option("--report", is_flag=True, help="Generate final acceptance report")
+@click.option("--device", type=click.Choice(["auto", "cuda", "cpu"]), default="auto", help="Device to use")
+@click.option("--no-amp", is_flag=True, help="Disable Automatic Mixed Precision")
+@click.option("--compile", is_flag=True, help="Enable torch.compile for speed")
+@click.option("--num-workers", type=int, default=None, help="Number of DataLoader workers")
+@click.option("--gpu-mem-fraction", type=float, default=1.0, help="GPU memory fraction to use")
+def eval(checkpoint: str, num_episodes: int, output_dir: Optional[str], render: bool, mock: bool, report: bool,
+         device: str, no_amp: bool, compile: bool, num_workers: Optional[int], gpu_mem_fraction: float) -> None:
     """Evaluate trained model and generate metrics/videos."""
     console.print(Panel.fit("📊 Evaluating Model", style="bold purple"))
     
     paths = load_paths_config()
+    
+    # Load and update configuration with CLI overrides
+    train_config = load_config("configs/train.yaml")
+    train_config = update_config_with_cli_overrides(
+        train_config, device, no_amp, compile, num_workers, gpu_mem_fraction
+    )
     
     if output_dir is None:
         output_dir = paths["videos_dir"]
     
     try:
         from src.eval.evaluator import Evaluator
-        evaluator = Evaluator(checkpoint_path=checkpoint, output_dir=output_dir)
-        results = evaluator.evaluate(num_episodes=num_episodes, render=render)
+        evaluator = Evaluator(checkpoint_path=checkpoint, output_dir=output_dir, config=train_config)
+        results = evaluator.evaluate(num_episodes=num_episodes, render=render, mock=mock)
+        
+        # Generate final report if requested
+        if report:
+            from src.eval.report import generate_final_report
+            report_path = generate_final_report(results, output_dir)
+            console.print(f"[green]📋 Final report generated: {report_path}[/green]")
         
         # Print summary
         table = Table(title="Evaluation Results")
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="magenta")
         
-        for metric, value in results.items():
-            table.add_row(metric, f"{value:.4f}")
+        aggregate_metrics = results.get('aggregate_metrics', {})
+        for metric, value in aggregate_metrics.items():
+            if isinstance(value, (int, float)):
+                table.add_row(metric, f"{value:.4f}")
         
         console.print(table)
         console.print(f"\n[green]✅ Evaluation completed! Results saved to {output_dir}[/green]")
@@ -276,7 +370,8 @@ def eval(checkpoint: str, num_episodes: int, output_dir: Optional[str], render: 
 @cli.command()
 @click.option("--output-dir", default=None, help="Output directory for benchmark results")
 @click.option("--num-episodes", "-n", default=5, help="Episodes per experiment")
-def bench(output_dir: Optional[str], num_episodes: int) -> None:
+@click.option("--mock", is_flag=True, help="Use mock environment (no Unity required)")
+def bench(output_dir: Optional[str], num_episodes: int, mock: bool) -> None:
     """Run ablation studies and generate comparison results."""
     console.print(Panel.fit("🔬 Running Benchmark Experiments", style="bold cyan"))
     
@@ -286,17 +381,237 @@ def bench(output_dir: Optional[str], num_episodes: int) -> None:
         output_dir = paths["benchmarks_dir"]
     
     try:
-        from eval.benchmark import BenchmarkRunner
+        from src.eval.benchmark import BenchmarkRunner
         runner = BenchmarkRunner(output_dir=output_dir)
-        results = runner.run_ablation_study(num_episodes=num_episodes)
+        
+        # Define checkpoint paths for ablation study
+        checkpoint_paths = {
+            'rl_only': Path(paths["checkpoints_dir"]) / "rl_best_model",
+            'il_rl': Path(paths["checkpoints_dir"]) / "rl_best_model",  # Same for now
+            'il_rl_safety': Path(paths["checkpoints_dir"]) / "rl_best_model"  # Same for now
+        }
+        
+        results = runner.run_ablation_study(
+            checkpoint_paths=checkpoint_paths,
+            num_episodes=num_episodes,
+            mock=mock
+        )
         
         # Print comparison table
         console.print("\n[bold]Benchmark Results:[/bold]")
-        console.print(results)
+        ablation_report = results.get('ablation_report', {})
+        summary = ablation_report.get('summary', {})
+        
+        table = Table(title="Ablation Study Results")
+        table.add_column("Configuration", style="cyan")
+        table.add_column("Success Rate", style="green")
+        table.add_column("Mean Reward", style="yellow")
+        table.add_column("Safety Violations", style="red")
+        
+        for config_name, metrics in summary.items():
+            table.add_row(
+                config_name,
+                f"{metrics.get('success_rate', 0):.2%}",
+                f"{metrics.get('mean_reward', 0):.2f}",
+                f"{metrics.get('mean_safety_violations', 0):.1f}"
+            )
+        
+        console.print(table)
         console.print(f"\n[green]✅ Benchmark completed! Results saved to {output_dir}[/green]")
         
     except Exception as e:
         console.print(f"[red]Failed to run benchmark: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--config", "-c", default="configs/train.yaml", help="Training config file")
+@click.option("--output-dir", default=None, help="Output directory for models")
+@click.option("--epochs", "-e", default=20, help="Number of training epochs")
+def pretrain_vision(config: str, output_dir: Optional[str], epochs: int) -> None:
+    """Pretrain vision models on Kvasir-SEG dataset."""
+    console.print(Panel.fit("👁️ Pretraining Vision Models", style="bold blue"))
+    
+    paths = load_paths_config()
+    train_config = load_config(config)
+    
+    if output_dir is None:
+        output_dir = paths["models_dir"]
+    
+    # Check if Kvasir-SEG dataset exists
+    kvasir_dir = Path(paths["kvasir_seg_dir"])
+    if not kvasir_dir.exists():
+        console.print("[red]Error: Kvasir-SEG dataset not found![/red]")
+        console.print("Please run 'python manage.py bootstrap' first")
+        sys.exit(1)
+    
+    try:
+        from src.vision.pretrain import pretrain_safety_segmentation
+        
+        # Create pretraining config
+        pretrain_config = {
+            "image_size": [64, 64],
+            "num_classes": 3,
+            "base_channels": 32,
+            "batch_size": 16,
+            "learning_rate": 1e-3,
+            "weight_decay": 1e-5,
+            "num_epochs": epochs,
+            "device": "cuda" if torch.cuda.is_available() else "cpu"
+        }
+        
+        metrics = pretrain_safety_segmentation(
+            data_dir=kvasir_dir,
+            output_dir=Path(output_dir),
+            config=pretrain_config
+        )
+        
+        # Print results
+        table = Table(title="Pretraining Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="magenta")
+        
+        for metric, value in metrics.items():
+            if isinstance(value, (int, float)):
+                table.add_row(metric, f"{value:.4f}")
+        
+        console.print(table)
+        console.print(f"\n[green]✅ Vision pretraining completed! Model saved to {output_dir}[/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Failed to pretrain vision models: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--build-path", default=None, help="Path to Unity headless build")
+@click.option("--port", default=5005, help="Port for Unity communication")
+@click.option("--log-file", default=None, help="Log file for Unity output")
+def headless_run(build_path: Optional[str], port: int, log_file: Optional[str]) -> None:
+    """Launch Unity headless build for server deployment."""
+    console.print(Panel.fit("🖥️ Launching Unity Headless Build", style="bold magenta"))
+    
+    paths = load_paths_config()
+    
+    if build_path is None:
+        build_path = paths["unity_build"]
+    
+    build_path = Path(build_path)
+    
+    if not build_path.exists():
+        console.print(f"[red]Error: Unity build not found: {build_path}[/red]")
+        console.print("Please build the Unity environment first (see README)")
+        sys.exit(1)
+    
+    try:
+        from src.utils.sim import launch_unity_headless, wait_for_unity_connection
+        
+        # Launch Unity headless
+        log_path = Path(log_file) if log_file else None
+        process = launch_unity_headless(
+            build_path=build_path,
+            log_file=log_path,
+            port=port
+        )
+        
+        console.print(f"[green]Unity launched with PID: {process.pid}[/green]")
+        console.print(f"[green]Listening on port: {port}[/green]")
+        
+        # Wait for connection
+        if wait_for_unity_connection(port, timeout=60):
+            console.print("[green]✅ Unity connection established![/green]")
+            console.print("[yellow]Press Ctrl+C to stop Unity[/yellow]")
+            
+            try:
+                # Keep running until interrupted
+                process.wait()
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopping Unity...[/yellow]")
+                process.terminate()
+                process.wait()
+                console.print("[green]✅ Unity stopped[/green]")
+        else:
+            console.print("[red]❌ Failed to establish Unity connection[/red]")
+            process.terminate()
+            sys.exit(1)
+        
+    except Exception as e:
+        console.print(f"[red]Failed to launch Unity: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--logs", is_flag=True, help="Remove log files")
+@click.option("--models", is_flag=True, help="Remove model checkpoints")
+@click.option("--videos", is_flag=True, help="Remove video files")
+@click.option("--all", is_flag=True, help="Remove all temporary files")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
+def clean(logs: bool, models: bool, videos: bool, all: bool, confirm: bool) -> None:
+    """Clean up temporary files and logs."""
+    console.print(Panel.fit("🧹 Cleaning Up Files", style="bold yellow"))
+    
+    paths = load_paths_config()
+    
+    # Determine what to clean
+    if all:
+        clean_logs = clean_models = clean_videos = True
+    else:
+        clean_logs = logs
+        clean_models = models
+        clean_videos = videos
+    
+    if not any([clean_logs, clean_models, clean_videos]):
+        console.print("[yellow]No cleanup options specified. Use --help for options.[/yellow]")
+        return
+    
+    # Show what will be cleaned
+    cleanup_items = []
+    if clean_logs:
+        cleanup_items.append("Log files")
+    if clean_models:
+        cleanup_items.append("Model checkpoints")
+    if clean_videos:
+        cleanup_items.append("Video files")
+    
+    console.print(f"[yellow]Will clean: {', '.join(cleanup_items)}[/yellow]")
+    
+    # Confirm unless --confirm flag
+    if not confirm:
+        if not click.confirm("Are you sure you want to continue?"):
+            console.print("[yellow]Cleanup cancelled[/yellow]")
+            return
+    
+    try:
+        import shutil
+        
+        # Clean logs
+        if clean_logs:
+            logs_dir = Path(paths["logs_dir"])
+            if logs_dir.exists():
+                shutil.rmtree(logs_dir)
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                console.print(f"[green]✅ Cleaned logs: {logs_dir}[/green]")
+        
+        # Clean models
+        if clean_models:
+            models_dir = Path(paths["checkpoints_dir"])
+            if models_dir.exists():
+                for model_file in models_dir.glob("*.pth"):
+                    model_file.unlink()
+                console.print(f"[green]✅ Cleaned models: {models_dir}[/green]")
+        
+        # Clean videos
+        if clean_videos:
+            videos_dir = Path(paths["videos_dir"])
+            if videos_dir.exists():
+                for video_file in videos_dir.glob("*.mp4"):
+                    video_file.unlink()
+                console.print(f"[green]✅ Cleaned videos: {videos_dir}[/green]")
+        
+        console.print("[green]✅ Cleanup completed![/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Failed to clean files: {e}[/red]")
         sys.exit(1)
 
 

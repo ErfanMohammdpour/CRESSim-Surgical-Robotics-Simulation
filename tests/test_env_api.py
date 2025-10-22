@@ -1,255 +1,344 @@
 """
-Tests for environment API and wrappers.
+Tests for environment API and functionality.
 """
 
 import pytest
 import numpy as np
 import torch
 from unittest.mock import Mock, patch
+import sys
+from pathlib import Path
 
-from src.envs.unity_env import UnityEnv, MockUnityEnv
-from src.envs.wrappers import FrameStackWrapper, RewardShapingWrapper, DomainRandomizationWrapper
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from src.envs.mock_env import MockSuctionEnv
+from src.envs.unity_env import UnityEnvWrapper, CurriculumEnv, create_environment
 
 
-class TestMockUnityEnv:
-    """Test MockUnityEnv functionality."""
+class TestMockSuctionEnv:
+    """Test mock suction environment."""
     
     def test_env_creation(self):
         """Test environment creation."""
-        env = MockUnityEnv()
-        assert env is not None
+        env = MockSuctionEnv(image_size=(128, 128), max_steps=1000)
+        
+        assert env.image_size == (128, 128)
+        assert env.max_steps == 1000
         assert env.action_space.shape == (5,)
-        assert 'image' in env.observation_space.spaces
-        assert 'aux' in env.observation_space.spaces
+        assert env.observation_space.shape == (128, 128, 3)
     
-    def test_reset(self):
+    def test_env_reset(self):
         """Test environment reset."""
-        env = MockUnityEnv()
-        obs, info = env.reset()
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
         
-        assert isinstance(obs, dict)
-        assert 'image' in obs
-        assert 'aux' in obs
-        assert obs['image'].shape == (3, 84, 84)
-        assert obs['aux'].shape == (4,)
+        obs, info = env.reset(seed=42)
+        
+        assert obs.shape == (64, 64, 3)
+        assert obs.dtype == np.uint8
         assert isinstance(info, dict)
+        assert 'step_count' in info
+        assert 'position' in info
+        assert 'liquid_mass' in info
     
-    def test_step(self):
+    def test_env_step(self):
         """Test environment step."""
-        env = MockUnityEnv()
-        obs, info = env.reset()
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
         
-        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
-        next_obs, reward, terminated, truncated, info = env.step(action)
+        obs, info = env.reset(seed=42)
         
-        assert isinstance(next_obs, dict)
+        # Test valid action
+        action = env.action_space.sample()
+        next_obs, reward, terminated, truncated, next_info = env.step(action)
+        
+        assert next_obs.shape == (64, 64, 3)
         assert isinstance(reward, float)
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
-        assert isinstance(info, dict)
+        assert isinstance(next_info, dict)
     
-    def test_render(self):
-        """Test environment render."""
-        env = MockUnityEnv()
-        obs, info = env.reset()
+    def test_env_determinism(self):
+        """Test environment determinism with fixed seed."""
+        env1 = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        env2 = MockSuctionEnv(image_size=(64, 64), max_steps=100)
         
-        image = env.render()
-        assert image is not None
-        assert image.shape == (84, 84, 3)
+        # Reset with same seed
+        obs1, info1 = env1.reset(seed=42)
+        obs2, info2 = env2.reset(seed=42)
+        
+        # Should be identical
+        assert np.array_equal(obs1, obs2)
+        assert info1['step_count'] == info2['step_count']
+        assert np.array_equal(info1['position'], info2['position'])
     
-    def test_close(self):
-        """Test environment close."""
-        env = MockUnityEnv()
-        env.close()
-        assert not env.connected
-
-
-class TestFrameStackWrapper:
-    """Test FrameStackWrapper functionality."""
-    
-    def test_wrapper_creation(self):
-        """Test wrapper creation."""
-        env = MockUnityEnv()
-        wrapped_env = FrameStackWrapper(env, num_frames=4)
+    def test_env_termination(self):
+        """Test environment termination conditions."""
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=10)
         
-        assert wrapped_env.num_frames == 4
-        assert wrapped_env.observation_space['image'].shape == (12, 84, 84)  # 4 * 3 channels
-    
-    def test_reset_with_wrapper(self):
-        """Test reset with frame stacking."""
-        env = MockUnityEnv()
-        wrapped_env = FrameStackWrapper(env, num_frames=4)
+        obs, info = env.reset(seed=42)
         
-        obs, info = wrapped_env.reset()
-        assert obs['image'].shape == (12, 84, 84)
-        assert len(wrapped_env.frames) == 4
-    
-    def test_step_with_wrapper(self):
-        """Test step with frame stacking."""
-        env = MockUnityEnv()
-        wrapped_env = FrameStackWrapper(env, num_frames=4)
-        
-        obs, info = wrapped_env.reset()
-        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
-        next_obs, reward, terminated, truncated, info = wrapped_env.step(action)
-        
-        assert next_obs['image'].shape == (12, 84, 84)
-        assert len(wrapped_env.frames) == 4
-
-
-class TestRewardShapingWrapper:
-    """Test RewardShapingWrapper functionality."""
-    
-    def test_wrapper_creation(self):
-        """Test wrapper creation."""
-        env = MockUnityEnv()
-        config = {
-            'reward_weights': {
-                'alpha': 1.0,
-                'beta': 0.5,
-                'lambda_time': -0.01,
-                'lambda_action': -0.001,
-                'lambda_collision': -1.0,
-                'lambda_safety': -2.0
-            }
-        }
-        wrapped_env = RewardShapingWrapper(env, config)
-        
-        assert wrapped_env.alpha == 1.0
-        assert wrapped_env.beta == 0.5
-    
-    def test_reward_shaping(self):
-        """Test reward shaping."""
-        env = MockUnityEnv()
-        config = {
-            'reward_weights': {
-                'alpha': 1.0,
-                'beta': 0.5,
-                'lambda_time': -0.01,
-                'lambda_action': -0.001,
-                'lambda_collision': -1.0,
-                'lambda_safety': -2.0
-            }
-        }
-        wrapped_env = RewardShapingWrapper(env, config)
-        
-        obs, info = wrapped_env.reset()
-        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
-        next_obs, reward, terminated, truncated, info = wrapped_env.step(action)
-        
-        assert isinstance(reward, float)
-        assert 'shaped_reward' in info
-
-
-class TestDomainRandomizationWrapper:
-    """Test DomainRandomizationWrapper functionality."""
-    
-    def test_wrapper_creation(self):
-        """Test wrapper creation."""
-        env = MockUnityEnv()
-        config = {
-            'domain_randomization': {
-                'lighting': {
-                    'intensity_range': [0.7, 1.3],
-                    'color_temp_range': [3000, 7000]
-                },
-                'camera': {
-                    'noise_std': 0.01
-                }
-            }
-        }
-        wrapped_env = DomainRandomizationWrapper(env, config)
-        
-        assert wrapped_env.randomization_config is not None
-    
-    def test_randomization_application(self):
-        """Test domain randomization application."""
-        env = MockUnityEnv()
-        config = {
-            'domain_randomization': {
-                'lighting': {
-                    'intensity_range': [0.7, 1.3],
-                    'color_temp_range': [3000, 7000]
-                }
-            }
-        }
-        wrapped_env = DomainRandomizationWrapper(env, config)
-        
-        obs, info = wrapped_env.reset()
-        assert wrapped_env.current_lighting is not None
-        assert 'intensity' in wrapped_env.current_lighting
-        assert 'color_temp' in wrapped_env.current_lighting
-
-
-class TestEnvironmentIntegration:
-    """Test environment integration."""
-    
-    def test_full_wrapper_chain(self):
-        """Test full wrapper chain."""
-        env = MockUnityEnv()
-        
-        # Apply all wrappers
-        env = FrameStackWrapper(env, num_frames=4)
-        env = RewardShapingWrapper(env, {'reward_weights': {}})
-        env = DomainRandomizationWrapper(env, {'domain_randomization': {}})
-        
-        # Test reset
-        obs, info = env.reset()
-        assert obs['image'].shape == (12, 84, 84)
-        assert 'aux' in obs
-        
-        # Test step
-        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
-        next_obs, reward, terminated, truncated, info = env.step(action)
-        
-        assert next_obs['image'].shape == (12, 84, 84)
-        assert isinstance(reward, float)
-        assert isinstance(terminated, bool)
-        assert isinstance(truncated, bool)
-    
-    def test_episode_completion(self):
-        """Test episode completion."""
-        env = MockUnityEnv()
-        env = FrameStackWrapper(env, num_frames=4)
-        
-        obs, info = env.reset()
-        episode_length = 0
-        
-        for _ in range(100):  # Max steps
-            action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+        # Run until termination
+        for step in range(15):  # More than max_steps
+            action = env.action_space.sample()
             obs, reward, terminated, truncated, info = env.step(action)
-            episode_length += 1
             
             if terminated or truncated:
                 break
         
-        assert episode_length > 0
-        assert episode_length <= 100
-
-
-@pytest.mark.parametrize("num_frames", [2, 4, 8])
-def test_frame_stack_variations(num_frames):
-    """Test different frame stack sizes."""
-    env = MockUnityEnv()
-    wrapped_env = FrameStackWrapper(env, num_frames=num_frames)
+        assert step < 15  # Should terminate before max steps
+        assert terminated or truncated
     
-    obs, info = wrapped_env.reset()
-    expected_channels = num_frames * 3
-    assert obs['image'].shape == (expected_channels, 84, 84)
+    def test_reward_calculation(self):
+        """Test reward calculation."""
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        obs, info = env.reset(seed=42)
+        
+        # Test reward calculation
+        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0])  # Suction on
+        obs, reward, terminated, truncated, info = env.step(action)
+        
+        assert isinstance(reward, float)
+        assert reward >= -10.0  # Should not be extremely negative
+        assert reward <= 10.0   # Should not be extremely positive
+    
+    def test_info_consistency(self):
+        """Test info dictionary consistency."""
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        obs, info = env.reset(seed=42)
+        
+        # Check initial info
+        assert 'step_count' in info
+        assert 'position' in info
+        assert 'orientation' in info
+        assert 'suction_active' in info
+        assert 'liquid_mass' in info
+        assert 'contaminant_mass' in info
+        assert 'collision_count' in info
+        assert 'safety_violations' in info
+        assert 'liquid_reduction' in info
+        assert 'contaminant_reduction' in info
+        
+        # Check types
+        assert isinstance(info['step_count'], int)
+        assert isinstance(info['position'], np.ndarray)
+        assert isinstance(info['orientation'], float)
+        assert isinstance(info['suction_active'], bool)
+        assert isinstance(info['liquid_mass'], float)
+        assert isinstance(info['contaminant_mass'], float)
+        assert isinstance(info['collision_count'], int)
+        assert isinstance(info['safety_violations'], int)
+        assert isinstance(info['liquid_reduction'], float)
+        assert isinstance(info['contaminant_reduction'], float)
 
 
-@pytest.mark.parametrize("action", [
-    np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-    np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
-    np.array([-1.0, -1.0, -1.0, -1.0, 0.0], dtype=np.float32)
+class TestUnityEnvWrapper:
+    """Test Unity environment wrapper."""
+    
+    def test_wrapper_creation(self):
+        """Test wrapper creation."""
+        build_path = Path("test_build.x86_64")
+        
+        with patch.object(Path, 'exists', return_value=True):
+            wrapper = UnityEnvWrapper(
+                unity_build_path=build_path,
+                port=5005,
+                image_size=(128, 128),
+                max_steps=1000
+            )
+            
+            assert wrapper.unity_build_path == build_path
+            assert wrapper.port == 5005
+            assert wrapper.image_size == (128, 128)
+            assert wrapper.max_steps == 1000
+            assert wrapper.action_space.shape == (5,)
+            assert wrapper.observation_space.shape == (128, 128, 3)
+    
+    def test_wrapper_missing_build(self):
+        """Test wrapper with missing build."""
+        build_path = Path("nonexistent_build.x86_64")
+        
+        with patch.object(Path, 'exists', return_value=False):
+            with pytest.raises(FileNotFoundError):
+                UnityEnvWrapper(
+                    unity_build_path=build_path,
+                    port=5005,
+                    image_size=(128, 128),
+                    max_steps=1000
+                )
+
+
+class TestCurriculumEnv:
+    """Test curriculum environment."""
+    
+    def test_curriculum_creation(self):
+        """Test curriculum environment creation."""
+        base_env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        curriculum_config = {
+            'min_difficulty': 0.3,
+            'max_difficulty': 1.0,
+            'success_threshold': 0.7,
+            'difficulty_increase': 0.1,
+            'evaluation_episodes': 10
+        }
+        
+        env = CurriculumEnv(base_env, curriculum_config)
+        
+        assert env.min_difficulty == 0.3
+        assert env.max_difficulty == 1.0
+        assert env.success_threshold == 0.7
+        assert env.difficulty_increase == 0.1
+        assert env.current_difficulty == 0.3
+    
+    def test_curriculum_reset(self):
+        """Test curriculum environment reset."""
+        base_env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        curriculum_config = {
+            'min_difficulty': 0.3,
+            'max_difficulty': 1.0,
+            'success_threshold': 0.7,
+            'difficulty_increase': 0.1,
+            'evaluation_episodes': 10
+        }
+        
+        env = CurriculumEnv(base_env, curriculum_config)
+        
+        obs, info = env.reset(seed=42)
+        
+        assert obs.shape == (64, 64, 3)
+        assert 'current_difficulty' in info
+        assert 'liquid_mass' in info
+        assert 'contaminant_mass' in info
+        assert 'noise_level' in info
+        assert 'time_limit' in info
+        assert 'precision_required' in info
+    
+    def test_curriculum_update(self):
+        """Test curriculum update."""
+        base_env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        curriculum_config = {
+            'min_difficulty': 0.3,
+            'max_difficulty': 1.0,
+            'success_threshold': 0.7,
+            'difficulty_increase': 0.1,
+            'evaluation_episodes': 5
+        }
+        
+        env = CurriculumEnv(base_env, curriculum_config)
+        
+        # Add successful episodes
+        for _ in range(5):
+            env.update_episode_result(True)
+        
+        # Should increase difficulty
+        assert env.current_difficulty > env.min_difficulty
+    
+    def test_difficulty_params(self):
+        """Test difficulty parameter generation."""
+        base_env = MockSuctionEnv(image_size=(64, 64), max_steps=100)
+        
+        curriculum_config = {
+            'min_difficulty': 0.3,
+            'max_difficulty': 1.0,
+            'success_threshold': 0.7,
+            'difficulty_increase': 0.1,
+            'evaluation_episodes': 10
+        }
+        
+        env = CurriculumEnv(base_env, curriculum_config)
+        env.current_difficulty = 0.5
+        
+        params = env._get_curriculum_params()
+        
+        assert 'liquid_mass' in params
+        assert 'contaminant_mass' in params
+        assert 'noise_level' in params
+        assert 'time_limit' in params
+        assert 'precision_required' in params
+        
+        # Check that parameters scale with difficulty
+        assert params['liquid_mass'] > 0.5
+        assert params['contaminant_mass'] > 0.3
+        assert params['noise_level'] < 0.5
+
+
+class TestCreateEnvironment:
+    """Test environment creation function."""
+    
+    def test_create_mock_environment(self):
+        """Test creating mock environment."""
+        config = {
+            'image_size': [64, 64],
+            'max_episode_steps': 100
+        }
+        
+        env = create_environment(config, mock=True)
+        
+        assert isinstance(env, MockSuctionEnv)
+        assert env.image_size == (64, 64)
+        assert env.max_steps == 100
+    
+    def test_create_environment_with_curriculum(self):
+        """Test creating environment with curriculum."""
+        config = {
+            'image_size': [64, 64],
+            'max_episode_steps': 100,
+            'curriculum': {
+                'enabled': True,
+                'min_difficulty': 0.3,
+                'max_difficulty': 1.0,
+                'success_threshold': 0.7,
+                'difficulty_increase': 0.1,
+                'evaluation_episodes': 10
+            }
+        }
+        
+        env = create_environment(config, mock=True)
+        
+        assert isinstance(env, CurriculumEnv)
+        assert env.min_difficulty == 0.3
+        assert env.max_difficulty == 1.0
+    
+    def test_create_environment_without_curriculum(self):
+        """Test creating environment without curriculum."""
+        config = {
+            'image_size': [64, 64],
+            'max_episode_steps': 100,
+            'curriculum': {
+                'enabled': False
+            }
+        }
+        
+        env = create_environment(config, mock=True)
+        
+        assert isinstance(env, MockSuctionEnv)
+        assert not isinstance(env, CurriculumEnv)
+
+
+@pytest.mark.parametrize("image_size,max_steps", [
+    ((64, 64), 100),
+    ((128, 128), 500),
+    ((256, 256), 1000)
 ])
-def test_action_variations(action):
-    """Test different action types."""
-    env = MockUnityEnv()
-    obs, info = env.reset()
+def test_env_different_sizes(image_size, max_steps):
+    """Test environment with different image sizes and max steps."""
+    env = MockSuctionEnv(image_size=image_size, max_steps=max_steps)
     
-    next_obs, reward, terminated, truncated, info = env.step(action)
+    assert env.image_size == image_size
+    assert env.max_steps == max_steps
+    assert env.observation_space.shape == (*image_size, 3)
     
-    assert isinstance(reward, float)
-    assert isinstance(terminated, bool)
-    assert isinstance(truncated, bool)
+    obs, info = env.reset(seed=42)
+    assert obs.shape == (*image_size, 3)
+    
+    action = env.action_space.sample()
+    next_obs, reward, terminated, truncated, next_info = env.step(action)
+    assert next_obs.shape == (*image_size, 3)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

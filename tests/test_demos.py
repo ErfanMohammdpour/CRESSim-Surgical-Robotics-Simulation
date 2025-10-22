@@ -1,598 +1,557 @@
 """
-Tests for demo generation and processing.
+Tests for demo generation and filtering.
 """
 
 import pytest
 import numpy as np
-from unittest.mock import Mock, patch
+import h5py
 from pathlib import Path
+from unittest.mock import Mock, patch
+import sys
 import tempfile
 import shutil
 
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from src.il.demos import ScriptedPolicy, DemoGenerator, generate_demos
-from src.il.filter_weight import DemoFilter, DemoWeighting, DemoProcessor
-from src.il.bc_trainer import BCTrainer, DemoDataset
+from src.il.filter_weight import DemoFilter, DemoWeighting, filter_weight_demos
+from src.envs.mock_env import MockSuctionEnv
 
 
 class TestScriptedPolicy:
-    """Test scripted policy functionality."""
+    """Test scripted policy for demo generation."""
     
     def test_policy_creation(self):
         """Test scripted policy creation."""
         config = {
-            'suction_radius': 0.05,
-            'approach_speed': 0.02,
-            'suction_speed': 0.01,
-            'exploration_noise': 0.1,
-            'success_threshold': 0.8
+            'noise_level': 0.1,
+            'suction_threshold': 0.5,
+            'movement_scale': 0.05,
+            'suction_probability': 0.3
         }
         
         policy = ScriptedPolicy(config)
         
-        assert policy.suction_radius == 0.05
-        assert policy.approach_speed == 0.02
-        assert policy.suction_speed == 0.01
-        assert policy.exploration_noise == 0.1
-        assert policy.success_threshold == 0.8
+        assert policy.noise_level == 0.1
+        assert policy.suction_threshold == 0.5
+        assert policy.movement_scale == 0.05
+        assert policy.suction_probability == 0.3
     
-    def test_policy_reset(self):
-        """Test policy reset."""
+    def test_policy_action(self):
+        """Test scripted policy action generation."""
         config = {
-            'suction_radius': 0.05,
-            'approach_speed': 0.02,
-            'suction_speed': 0.01,
-            'exploration_noise': 0.1,
-            'success_threshold': 0.8
+            'noise_level': 0.1,
+            'suction_threshold': 0.5,
+            'movement_scale': 0.05,
+            'suction_probability': 0.3
         }
         
         policy = ScriptedPolicy(config)
         
-        obs = {
-            'image': np.random.rand(3, 84, 84),
-            'aux': np.array([0.0, 1.0, 0.5, 0.0])
+        # Create dummy observation and info
+        obs = np.random.randint(0, 255, (128, 128, 3), dtype=np.uint8)
+        info = {
+            'liquid_mass': 50.0,
+            'contaminant_mass': 25.0,
+            'position': np.array([0.0, 0.0, 0.0]),
+            'orientation': 0.0
         }
         
-        policy.reset(obs)
+        action = policy.get_action(obs, info)
         
-        assert policy.target_position is not None
-        assert policy.suction_active is False
-        assert policy.episode_step == 0
-    
-    def test_policy_action_generation(self):
-        """Test action generation."""
-        config = {
-            'suction_radius': 0.05,
-            'approach_speed': 0.02,
-            'suction_speed': 0.01,
-            'exploration_noise': 0.1,
-            'success_threshold': 0.8
-        }
-        
-        policy = ScriptedPolicy(config)
-        
-        obs = {
-            'image': np.random.rand(3, 84, 84),
-            'aux': np.array([0.0, 1.0, 0.5, 0.0])
-        }
-        
-        policy.reset(obs)
-        action = policy.act(obs)
-        
+        assert isinstance(action, np.ndarray)
         assert action.shape == (5,)
-        assert np.all(action >= -1.0) and np.all(action <= 1.0)
         assert action.dtype == np.float32
+        
+        # Check action bounds
+        assert -0.1 <= action[0] <= 0.1  # dx
+        assert -0.1 <= action[1] <= 0.1  # dy
+        assert -0.1 <= action[2] <= 0.1  # dz
+        assert -0.2 <= action[3] <= 0.2  # dyaw
+        assert action[4] in [0.0, 1.0]   # suction_toggle
     
-    def test_action_components(self):
-        """Test action component generation."""
+    def test_policy_suction_logic(self):
+        """Test suction logic in scripted policy."""
         config = {
-            'suction_radius': 0.05,
-            'approach_speed': 0.02,
-            'suction_speed': 0.01,
-            'exploration_noise': 0.0,  # No noise for deterministic test
-            'success_threshold': 0.8
+            'noise_level': 0.0,  # No noise for deterministic test
+            'suction_threshold': 0.5,
+            'movement_scale': 0.05,
+            'suction_probability': 1.0  # Always suction when conditions met
         }
         
         policy = ScriptedPolicy(config)
         
-        obs = {
-            'image': np.random.rand(3, 84, 84),
-            'aux': np.array([0.0, 1.0, 0.5, 0.0])
+        # Test with high liquid mass (should suction)
+        obs = np.random.randint(0, 255, (128, 128, 3), dtype=np.uint8)
+        info = {
+            'liquid_mass': 50.0,  # High liquid mass
+            'contaminant_mass': 25.0,
+            'position': np.array([0.0, 0.0, 0.0]),
+            'orientation': 0.0
         }
         
-        policy.reset(obs)
-        action = policy.act(obs)
+        action = policy.get_action(obs, info)
         
-        # Check action components
-        assert len(action) == 5  # [dx, dy, dz, dyaw, suction_toggle]
-        assert action[4] in [0.0, 1.0]  # Suction toggle should be binary
+        # Should activate suction
+        assert action[4] == 1.0
+        
+        # Test with low liquid mass (should not suction)
+        info['liquid_mass'] = 5.0  # Low liquid mass
+        
+        action = policy.get_action(obs, info)
+        
+        # Should not activate suction
+        assert action[4] == 0.0
 
 
 class TestDemoGenerator:
-    """Test demo generation functionality."""
+    """Test demo generation."""
     
     def test_generator_creation(self):
         """Test demo generator creation."""
         config = {
-            'num_episodes': 10,
+            'image_size': [128, 128],
             'episode_length': 100,
-            'num_workers': 2,
-            'mock': True
+            'scripted_policy': {
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
+            }
         }
         
         generator = DemoGenerator(config)
         
-        assert generator.num_episodes == 10
+        assert generator.image_size == (128, 128)
         assert generator.episode_length == 100
-        assert generator.num_workers == 2
-        assert generator.mock is True
-    
-    def test_mock_environment_creation(self):
-        """Test mock environment creation."""
-        config = {'mock': True}
-        generator = DemoGenerator(config)
-        
-        env = generator._create_mock_env()
-        assert env is not None
+        assert generator.scripted_policy is not None
     
     def test_episode_generation(self):
         """Test single episode generation."""
         config = {
-            'num_episodes': 1,
-            'episode_length': 10,
-            'mock': True,
+            'image_size': [64, 64],
+            'episode_length': 50,
             'scripted_policy': {
-                'suction_radius': 0.05,
-                'approach_speed': 0.02,
-                'suction_speed': 0.01,
-                'exploration_noise': 0.1,
-                'success_threshold': 0.8
-            }
-        }
-        
-        generator = DemoGenerator(config)
-        env = generator._create_mock_env()
-        env = generator._wrap_env(env)
-        
-        episode_data = generator._generate_episode(env, 0)
-        
-        assert 'observations' in episode_data
-        assert 'actions' in episode_data
-        assert 'rewards' in episode_data
-        assert 'dones' in episode_data
-        assert 'infos' in episode_data
-        assert 'episode_length' in episode_data
-        assert 'episode_idx' in episode_data
-        
-        assert len(episode_data['observations']) > 0
-        assert len(episode_data['actions']) > 0
-        assert len(episode_data['rewards']) > 0
-        assert len(episode_data['dones']) > 0
-        assert len(episode_data['infos']) > 0
-    
-    def test_noise_application(self):
-        """Test noise application to actions."""
-        config = {
-            'noise': {
-                'position_std': 0.01,
-                'rotation_std': 0.05,
-                'action_dropout': 0.1,
-                'temporal_noise': 0.05
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
             }
         }
         
         generator = DemoGenerator(config)
         
-        action = np.array([0.1, 0.1, 0.1, 0.1, 1.0], dtype=np.float32)
-        noisy_action = generator._apply_noise(action, 0)
+        # Create mock environment
+        env = MockSuctionEnv(image_size=(64, 64), max_steps=50)
         
-        assert noisy_action.shape == action.shape
-        assert np.all(noisy_action >= -1.0) and np.all(noisy_action <= 1.0)
+        # Generate episode
+        episode = generator.generate_episode(env, episode_id=0)
+        
+        assert isinstance(episode, dict)
+        assert 'episode_id' in episode
+        assert 'observations' in episode
+        assert 'actions' in episode
+        assert 'rewards' in episode
+        assert 'infos' in episode
+        assert 'safety_flags' in episode
+        assert 'length' in episode
+        
+        assert episode['episode_id'] == 0
+        assert episode['length'] > 0
+        assert len(episode['observations']) == episode['length']
+        assert len(episode['actions']) == episode['length']
+        assert len(episode['rewards']) == episode['length']
+        assert len(episode['infos']) == episode['length']
+        assert len(episode['safety_flags']) == episode['length']
+        
+        # Check data types and shapes
+        assert episode['observations'].shape == (episode['length'], 64, 64, 3)
+        assert episode['actions'].shape == (episode['length'], 5)
+        assert episode['rewards'].shape == (episode['length'],)
+        assert episode['safety_flags'].shape == (episode['length'],)
     
-    @patch('src.il.demos.MockUnityEnv')
-    def test_demo_generation_integration(self, mock_env_class):
-        """Test complete demo generation integration."""
-        # Mock environment
-        mock_env = Mock()
-        mock_env.reset.return_value = (
-            {'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 1.0, 0.5, 0.0])},
-            {'liquid_mass_remaining': 1.0, 'contaminant_mass_remaining': 0.5}
-        )
-        mock_env.step.return_value = (
-            {'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 0.9, 0.4, 0.0])},
-            0.1, False, False, {'liquid_mass_remaining': 0.9, 'contaminant_mass_remaining': 0.4}
-        )
-        mock_env_class.return_value = mock_env
-        
+    def test_demo_saving(self):
+        """Test demo saving to HDF5."""
         config = {
-            'num_episodes': 2,
-            'episode_length': 5,
-            'mock': True,
+            'image_size': [64, 64],
+            'episode_length': 20,
             'scripted_policy': {
-                'suction_radius': 0.05,
-                'approach_speed': 0.02,
-                'suction_speed': 0.01,
-                'exploration_noise': 0.1,
-                'success_threshold': 0.8
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
             }
         }
         
+        generator = DemoGenerator(config)
+        
+        # Create mock episodes
+        episodes = []
+        for i in range(3):
+            episode = {
+                'episode_id': i,
+                'observations': np.random.randint(0, 255, (20, 64, 64, 3), dtype=np.uint8),
+                'actions': np.random.randn(20, 5).astype(np.float32),
+                'rewards': np.random.randn(20).astype(np.float32),
+                'infos': [{'liquid_mass': 50.0, 'contaminant_mass': 25.0} for _ in range(20)],
+                'safety_flags': np.random.choice([True, False], 20),
+                'length': 20
+            }
+            episodes.append(episode)
+        
+        # Save episodes
         with tempfile.TemporaryDirectory() as temp_dir:
-            generator = DemoGenerator(config)
-            generator.generate_demos(temp_dir)
+            output_dir = Path(temp_dir)
+            generator._save_episodes(episodes, output_dir)
             
-            # Check that files were created
-            temp_path = Path(temp_dir)
-            demo_files = list(temp_path.glob("demos_*.npz"))
-            assert len(demo_files) > 0
+            # Check if file was created
+            demos_file = output_dir / "demos.h5"
+            assert demos_file.exists()
             
-            # Check summary file
-            summary_file = temp_path / "demo_summary.json"
+            # Check file contents
+            with h5py.File(demos_file, 'r') as f:
+                assert len(f.keys()) == 3  # 3 episodes
+                
+                for i in range(3):
+                    episode_key = f"episode_{i:03d}"
+                    assert episode_key in f
+                    
+                    episode_group = f[episode_key]
+                    assert 'observations' in episode_group
+                    assert 'actions' in episode_group
+                    assert 'rewards' in episode_group
+                    assert 'safety_flags' in episode_group
+                    assert episode_group.attrs['length'] == 20
+    
+    def test_weight_generation(self):
+        """Test weight generation."""
+        config = {
+            'image_size': [64, 64],
+            'episode_length': 20,
+            'scripted_policy': {
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
+            }
+        }
+        
+        generator = DemoGenerator(config)
+        
+        # Create mock episodes with different quality levels
+        episodes = []
+        for i in range(5):
+            # Vary liquid reduction to create different quality levels
+            liquid_reduction = 0.3 + i * 0.1  # 0.3 to 0.7
+            
+            episode = {
+                'episode_id': i,
+                'observations': np.random.randint(0, 255, (20, 64, 64, 3), dtype=np.uint8),
+                'actions': np.random.randn(20, 5).astype(np.float32),
+                'rewards': np.random.randn(20).astype(np.float32),
+                'infos': [{'liquid_reduction': liquid_reduction, 'contaminant_reduction': 0.5} for _ in range(20)],
+                'safety_flags': np.random.choice([True, False], 20),
+                'length': 20
+            }
+            episodes.append(episode)
+        
+        # Generate weights
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            generator._generate_weights(episodes, output_dir)
+            
+            # Check if weights file was created
+            weights_file = output_dir / "weights.npz"
+            assert weights_file.exists()
+            
+            # Check weights contents
+            weights_data = np.load(weights_file)
+            assert 'weights' in weights_data
+            assert 'features' in weights_data
+            
+            weights = weights_data['weights']
+            features = weights_data['features']
+            
+            assert len(weights) == 5  # 5 episodes
+            assert features.shape == (5, 4)  # 4 features
+            
+            # Weights should be between 0 and 1
+            assert np.all(weights >= 0)
+            assert np.all(weights <= 1)
+    
+    def test_summary_generation(self):
+        """Test summary generation."""
+        config = {
+            'image_size': [64, 64],
+            'episode_length': 20,
+            'scripted_policy': {
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
+            }
+        }
+        
+        generator = DemoGenerator(config)
+        
+        # Create mock episodes
+        episodes = []
+        for i in range(3):
+            episode = {
+                'episode_id': i,
+                'observations': np.random.randint(0, 255, (20, 64, 64, 3), dtype=np.uint8),
+                'actions': np.random.randn(20, 5).astype(np.float32),
+                'rewards': np.random.randn(20).astype(np.float32),
+                'infos': [
+                    {'liquid_reduction': 0.5, 'contaminant_reduction': 0.3, 'safety_violations': 0, 'collision_count': 1}
+                    for _ in range(20)
+                ],
+                'safety_flags': np.random.choice([True, False], 20),
+                'length': 20
+            }
+            episodes.append(episode)
+        
+        # Generate summary
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            generator._generate_summary(episodes, output_dir)
+            
+            # Check if summary file was created
+            summary_file = output_dir / "summary.json"
             assert summary_file.exists()
+            
+            # Check summary contents
+            import json
+            with open(summary_file, 'r') as f:
+                summary_data = json.load(f)
+            
+            assert len(summary_data) == 3  # 3 episodes
+            
+            for episode_summary in summary_data:
+                assert 'episode_id' in episode_summary
+                assert 'length' in episode_summary
+                assert 'liquid_reduction' in episode_summary
+                assert 'contaminant_reduction' in episode_summary
+                assert 'safety_violations' in episode_summary
+                assert 'collision_count' in episode_summary
+                assert 'total_reward' in episode_summary
 
 
 class TestDemoFilter:
-    """Test demo filtering functionality."""
+    """Test demo filtering."""
     
     def test_filter_creation(self):
         """Test demo filter creation."""
         config = {
-            'method': 'gmm',
-            'gmm_components': 3,
-            'percentile_threshold': 0.7,
-            'min_episode_length': 100,
-            'max_episode_length': 1000
-        }
-        
-        filter_obj = DemoFilter(config)
-        
-        assert filter_obj.method == 'gmm'
-        assert filter_obj.gmm_components == 3
-        assert filter_obj.percentile_threshold == 0.7
-        assert filter_obj.min_episode_length == 100
-        assert filter_obj.max_episode_length == 1000
-    
-    def test_quality_score_calculation(self):
-        """Test quality score calculation."""
-        config = {
-            'quality_metrics': {
-                'liquid_reduction_weight': 0.4,
-                'contaminant_reduction_weight': 0.3,
-                'smoothness_weight': 0.2,
-                'safety_weight': 0.1
+            'quality_filtering': {
+                'enabled': True,
+                'min_liquid_reduction': 0.3,
+                'min_contaminant_reduction': 0.2,
+                'max_collision_rate': 0.1,
+                'max_safety_violations': 0.05
             }
         }
         
         filter_obj = DemoFilter(config)
         
-        # Create mock demo
-        demo = {
+        assert filter_obj.enabled == True
+        assert filter_obj.min_liquid_reduction == 0.3
+        assert filter_obj.min_contaminant_reduction == 0.2
+        assert filter_obj.max_collision_rate == 0.1
+        assert filter_obj.max_safety_violations == 0.05
+    
+    def test_episode_filtering(self):
+        """Test episode filtering."""
+        config = {
+            'quality_filtering': {
+                'enabled': True,
+                'min_liquid_reduction': 0.3,
+                'min_contaminant_reduction': 0.2,
+                'max_collision_rate': 0.1,
+                'max_safety_violations': 0.05
+            }
+        }
+        
+        filter_obj = DemoFilter(config)
+        
+        # Create episodes with different quality levels
+        episodes = []
+        
+        # Good episode
+        good_episode = {
+            'episode_id': 0,
+            'length': 100,
             'infos': [
-                {'liquid_mass_remaining': 1.0, 'contaminant_mass_remaining': 0.5, 'collisions': 0},
-                {'liquid_mass_remaining': 0.8, 'contaminant_mass_remaining': 0.3, 'collisions': 0}
-            ],
-            'actions': [
-                np.array([0.1, 0.1, 0.1, 0.1, 1.0]),
-                np.array([0.2, 0.2, 0.2, 0.2, 0.0])
+                {'liquid_reduction': 0.8, 'contaminant_reduction': 0.6, 'safety_violations': 0, 'collision_count': 2}
+                for _ in range(100)
             ]
         }
+        episodes.append(good_episode)
         
-        quality_score = filter_obj._calculate_quality_scores([demo])[0]
+        # Bad episode (low liquid reduction)
+        bad_episode = {
+            'episode_id': 1,
+            'length': 100,
+            'infos': [
+                {'liquid_reduction': 0.2, 'contaminant_reduction': 0.6, 'safety_violations': 0, 'collision_count': 2}
+                for _ in range(100)
+            ]
+        }
+        episodes.append(bad_episode)
         
-        assert isinstance(quality_score, float)
-        assert quality_score >= 0.0 and quality_score <= 1.0
+        # Filter episodes
+        filtered_episodes = filter_obj.filter_episodes(episodes)
+        
+        # Should keep only the good episode
+        assert len(filtered_episodes) == 1
+        assert filtered_episodes[0]['episode_id'] == 0
     
-    def test_length_filtering(self):
-        """Test episode length filtering."""
+    def test_filter_disabled(self):
+        """Test filter when disabled."""
         config = {
-            'min_episode_length': 5,
-            'max_episode_length': 20
+            'quality_filtering': {
+                'enabled': False
+            }
         }
         
         filter_obj = DemoFilter(config)
         
-        # Create demos with different lengths
-        demos = [
-            {'episode_length': 3},   # Too short
-            {'episode_length': 10},  # Good
-            {'episode_length': 25},  # Too long
-            {'episode_length': 15}   # Good
-        ]
+        episodes = [{'episode_id': i} for i in range(5)]
+        filtered_episodes = filter_obj.filter_episodes(episodes)
         
-        valid_indices = filter_obj._filter_by_length(demos)
-        
-        assert valid_indices[0] == False  # Too short
-        assert valid_indices[1] == True   # Good
-        assert valid_indices[2] == False  # Too long
-        assert valid_indices[3] == True   # Good
-    
-    def test_gmm_filtering(self):
-        """Test GMM-based filtering."""
-        config = {
-            'method': 'gmm',
-            'gmm_components': 2
-        }
-        
-        filter_obj = DemoFilter(config)
-        
-        # Create mock quality scores
-        scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        
-        weights = filter_obj._gmm_filtering(scores)
-        
-        assert len(weights) == len(scores)
-        assert np.all(weights >= 0.0)
-        assert np.all(weights <= 1.0)
-    
-    def test_percentile_filtering(self):
-        """Test percentile-based filtering."""
-        config = {
-            'method': 'percentile',
-            'percentile_threshold': 0.7
-        }
-        
-        filter_obj = DemoFilter(config)
-        
-        # Create mock quality scores
-        scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        
-        weights = filter_obj._percentile_filtering(scores)
-        
-        assert len(weights) == len(scores)
-        assert np.all(weights >= 0.0)
-        assert np.all(weights <= 1.0)
-        
-        # Check that top 30% get non-zero weights
-        threshold = np.percentile(scores, 30)
-        high_scores = scores >= threshold
-        assert np.all(weights[high_scores] > 0.0)
+        # Should return all episodes when disabled
+        assert len(filtered_episodes) == 5
 
 
 class TestDemoWeighting:
-    """Test demo weighting functionality."""
+    """Test demo weighting."""
     
     def test_weighting_creation(self):
         """Test demo weighting creation."""
         config = {
-            'weighting_method': 'quality_based',
-            'temperature': 1.0,
-            'min_weight': 0.01,
-            'max_weight': 10.0
-        }
-        
-        weighting = DemoWeighting(config)
-        
-        assert weighting.weighting_method == 'quality_based'
-        assert weighting.temperature == 1.0
-        assert weighting.min_weight == 0.01
-        assert weighting.max_weight == 10.0
-    
-    def test_quality_based_weighting(self):
-        """Test quality-based weighting."""
-        config = {
-            'weighting_method': 'quality_based',
-            'temperature': 1.0
-        }
-        
-        weighting = DemoWeighting(config)
-        
-        demos = [{'episode_length': 100} for _ in range(5)]
-        quality_scores = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
-        
-        weights = weighting.calculate_weights(demos, quality_scores)
-        
-        assert len(weights) == len(demos)
-        assert np.all(weights >= 0.0)
-        assert abs(np.sum(weights) - len(weights)) < 1e-6  # Should be normalized
-    
-    def test_uniform_weighting(self):
-        """Test uniform weighting."""
-        config = {
-            'weighting_method': 'uniform'
-        }
-        
-        weighting = DemoWeighting(config)
-        
-        demos = [{'episode_length': 100} for _ in range(5)]
-        quality_scores = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
-        
-        weights = weighting.calculate_weights(demos, quality_scores)
-        
-        assert len(weights) == len(demos)
-        assert np.allclose(weights, 1.0)  # All weights should be equal
-    
-    def test_length_based_weighting(self):
-        """Test length-based weighting."""
-        config = {
-            'weighting_method': 'length_based'
-        }
-        
-        weighting = DemoWeighting(config)
-        
-        demos = [
-            {'episode_length': 50},
-            {'episode_length': 100},
-            {'episode_length': 150},
-            {'episode_length': 200}
-        ]
-        quality_scores = np.array([0.1, 0.3, 0.5, 0.7])
-        
-        weights = weighting.calculate_weights(demos, quality_scores)
-        
-        assert len(weights) == len(demos)
-        assert np.all(weights >= 0.0)
-        # Longer episodes should have higher weights
-        assert weights[3] > weights[2] > weights[1] > weights[0]
-
-
-class TestDemoDataset:
-    """Test demo dataset functionality."""
-    
-    def test_dataset_creation(self):
-        """Test demo dataset creation."""
-        # Create mock demos
-        demos = [
-            {
-                'observations': [{'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 1.0, 0.5, 0.0])} for _ in range(10)],
-                'actions': [np.random.rand(5) for _ in range(10)],
-                'rewards': [0.1] * 10,
-                'infos': [{'liquid_mass_remaining': 1.0 - i*0.1, 'contaminant_mass_remaining': 0.5 - i*0.05, 'collisions': 0} for i in range(10)],
-                'episode_length': 10
-            }
-        ]
-        
-        weights = np.array([1.0])
-        
-        dataset = DemoDataset(demos, weights, augment=False)
-        
-        assert len(dataset) == 10  # 10 transitions
-        assert len(dataset.transitions) == 10
-        assert len(dataset.transition_weights) == 10
-    
-    def test_dataset_getitem(self):
-        """Test dataset item access."""
-        # Create mock demos
-        demos = [
-            {
-                'observations': [{'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 1.0, 0.5, 0.0])} for _ in range(5)],
-                'actions': [np.random.rand(5) for _ in range(5)],
-                'rewards': [0.1] * 5,
-                'infos': [{'liquid_mass_remaining': 1.0 - i*0.1, 'contaminant_mass_remaining': 0.5 - i*0.05, 'collisions': 0} for i in range(5)],
-                'episode_length': 5
-            }
-        ]
-        
-        weights = np.array([1.0])
-        
-        dataset = DemoDataset(demos, weights, augment=False)
-        
-        # Test getting an item
-        item = dataset[0]
-        
-        assert 'image' in item
-        assert 'aux' in item
-        assert 'action' in item
-        assert 'weight' in item
-        
-        assert item['image'].shape == (3, 84, 84)
-        assert item['aux'].shape == (4,)
-        assert item['action'].shape == (5,)
-        assert isinstance(item['weight'], float)
-
-
-class TestDemoProcessor:
-    """Test demo processing pipeline."""
-    
-    def test_processor_creation(self):
-        """Test demo processor creation."""
-        config = {
-            'filtering': {
-                'method': 'gmm',
-                'gmm_components': 3
-            },
             'weighting': {
-                'weighting_method': 'quality_based',
-                'temperature': 1.0
+                'enabled': True,
+                'gmm_components': 2,
+                'features': ['liquid_reduction', 'contaminant_reduction', 'smoothness', 'safety_compliance'],
+                'weights': {
+                    'liquid_reduction': 0.4,
+                    'contaminant_reduction': 0.3,
+                    'smoothness': 0.2,
+                    'safety_compliance': 0.1
+                }
             }
         }
         
-        processor = DemoProcessor(config)
+        weighting_obj = DemoWeighting(config)
         
-        assert processor.filter is not None
-        assert processor.weighting is not None
+        assert weighting_obj.enabled == True
+        assert weighting_obj.gmm_components == 2
+        assert len(weighting_obj.features) == 4
+        assert weighting_obj.feature_weights['liquid_reduction'] == 0.4
     
-    def test_demo_processing(self):
-        """Test complete demo processing."""
+    def test_weight_calculation(self):
+        """Test weight calculation."""
         config = {
-            'filtering': {
-                'method': 'percentile',
-                'percentile_threshold': 0.7,
-                'min_episode_length': 5,
-                'max_episode_length': 100
-            },
             'weighting': {
-                'weighting_method': 'quality_based',
-                'temperature': 1.0
+                'enabled': True,
+                'gmm_components': 2,
+                'features': ['liquid_reduction', 'contaminant_reduction', 'smoothness', 'safety_compliance'],
+                'weights': {
+                    'liquid_reduction': 0.4,
+                    'contaminant_reduction': 0.3,
+                    'smoothness': 0.2,
+                    'safety_compliance': 0.1
+                }
             }
         }
         
-        processor = DemoProcessor(config)
+        weighting_obj = DemoWeighting(config)
         
-        # Create mock demos
-        demos = [
-            {
-                'observations': [{'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 1.0, 0.5, 0.0])} for _ in range(10)],
-                'actions': [np.random.rand(5) for _ in range(10)],
-                'rewards': [0.1] * 10,
-                'infos': [{'liquid_mass_remaining': 1.0 - i*0.1, 'contaminant_mass_remaining': 0.5 - i*0.05, 'collisions': 0} for i in range(10)],
-                'episode_length': 10
-            },
-            {
-                'observations': [{'image': np.random.rand(3, 84, 84), 'aux': np.array([0.0, 1.0, 0.5, 0.0])} for _ in range(8)],
-                'actions': [np.random.rand(5) for _ in range(8)],
-                'rewards': [0.2] * 8,
-                'infos': [{'liquid_mass_remaining': 1.0 - i*0.1, 'contaminant_mass_remaining': 0.5 - i*0.05, 'collisions': 0} for i in range(8)],
-                'episode_length': 8
+        # Create episodes with different quality levels
+        episodes = []
+        for i in range(5):
+            episode = {
+                'episode_id': i,
+                'actions': np.random.randn(20, 5).astype(np.float32),
+                'safety_flags': np.random.choice([True, False], 20),
+                'infos': [
+                    {
+                        'liquid_reduction': 0.3 + i * 0.1,  # 0.3 to 0.7
+                        'contaminant_reduction': 0.2 + i * 0.1  # 0.2 to 0.6
+                    }
+                    for _ in range(20)
+                ]
             }
-        ]
+            episodes.append(episode)
+        
+        # Calculate weights
+        weights = weighting_obj.calculate_weights(episodes)
+        
+        assert len(weights) == 5
+        assert np.all(weights >= 0)
+        assert np.all(weights <= 1)
+    
+    def test_weighting_disabled(self):
+        """Test weighting when disabled."""
+        config = {
+            'weighting': {
+                'enabled': False
+            }
+        }
+        
+        weighting_obj = DemoWeighting(config)
+        
+        episodes = [{'episode_id': i} for i in range(5)]
+        weights = weighting_obj.calculate_weights(episodes)
+        
+        # Should return uniform weights when disabled
+        assert len(weights) == 5
+        assert np.all(weights == 1.0)
+
+
+class TestGenerateDemos:
+    """Test demo generation function."""
+    
+    def test_generate_demos(self):
+        """Test demo generation function."""
+        config = {
+            'num_episodes': 3,
+            'image_size': [64, 64],
+            'episode_length': 20,
+            'scripted_policy': {
+                'noise_level': 0.1,
+                'suction_threshold': 0.5,
+                'movement_scale': 0.05,
+                'suction_probability': 0.3
+            }
+        }
         
         with tempfile.TemporaryDirectory() as temp_dir:
-            filtered_demos, weights = processor.process_demos(demos, temp_dir)
+            output_dir = Path(temp_dir)
             
-            assert len(filtered_demos) <= len(demos)  # Some may be filtered out
-            assert len(weights) == len(filtered_demos)
-            assert np.all(weights >= 0.0)
+            # Generate demos
+            generate_demos(output_dir, config, mock=True)
             
-            # Check that files were created
-            temp_path = Path(temp_dir)
-            assert (temp_path / "weights.npz").exists()
-            assert (temp_path / "filtered_demos.npz").exists()
-            assert (temp_path / "processing_stats.json").exists()
+            # Check if files were created
+            assert (output_dir / "demos.h5").exists()
+            assert (output_dir / "weights.npz").exists()
+            assert (output_dir / "summary.json").exists()
+            
+            # Check demos file
+            with h5py.File(output_dir / "demos.h5", 'r') as f:
+                assert len(f.keys()) == 3  # 3 episodes
+            
+            # Check weights file
+            weights_data = np.load(output_dir / "weights.npz")
+            assert len(weights_data['weights']) == 3
+            
+            # Check summary file
+            import json
+            with open(output_dir / "summary.json", 'r') as f:
+                summary_data = json.load(f)
+            assert len(summary_data) == 3
 
 
-@pytest.mark.parametrize("num_episodes", [1, 5, 10])
-def test_demo_generation_episodes(num_episodes):
-    """Test demo generation with different numbers of episodes."""
-    config = {
-        'num_episodes': num_episodes,
-        'episode_length': 5,
-        'mock': True
-    }
-    
-    generator = DemoGenerator(config)
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        generator.generate_demos(temp_dir)
-        
-        # Check that files were created
-        temp_path = Path(temp_dir)
-        demo_files = list(temp_path.glob("demos_*.npz"))
-        assert len(demo_files) > 0
-        
-        # Check summary file
-        summary_file = temp_path / "demo_summary.json"
-        assert summary_file.exists()
-
-
-@pytest.mark.parametrize("weighting_method", ["quality_based", "uniform", "length_based", "reward_based"])
-def test_weighting_methods(weighting_method):
-    """Test different weighting methods."""
-    config = {
-        'weighting_method': weighting_method,
-        'temperature': 1.0
-    }
-    
-    weighting = DemoWeighting(config)
-    
-    demos = [
-        {'episode_length': 100, 'total_reward': 10.0},
-        {'episode_length': 150, 'total_reward': 15.0},
-        {'episode_length': 200, 'total_reward': 20.0}
-    ]
-    
-    quality_scores = np.array([0.3, 0.6, 0.9])
-    
-    weights = weighting.calculate_weights(demos, quality_scores)
-    
-    assert len(weights) == len(demos)
-    assert np.all(weights >= 0.0)
-    assert abs(np.sum(weights) - len(weights)) < 1e-6  # Should be normalized
+if __name__ == "__main__":
+    pytest.main([__file__])

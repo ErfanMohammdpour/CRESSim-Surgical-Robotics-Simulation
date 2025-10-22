@@ -1,5 +1,5 @@
 """
-Behavior Cloning trainer for imitation learning.
+Behavior Cloning trainer for imitation learning with GPU support and AMP.
 """
 
 import os
@@ -10,27 +10,18 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import logging
 from tqdm import tqdm
 import json
 from datetime import datetime
 
 from ..vision.encoders import CNNEncoder
-
-# GPU utilities
-def get_device():
-    """Get the best available device"""
-    if torch.cuda.is_available():
-        return torch.device('cuda')
-    else:
-        return torch.device('cpu')
-
-def optimize_for_gpu():
-    """Optimize PyTorch for GPU usage"""
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
+from ..utils.device import (
+    get_device_from_config, log_device_info, optimize_for_gpu, 
+    create_optimizer, create_grad_scaler, get_dataloader_kwargs,
+    handle_oom_error, warmup_model, log_memory_usage, amp_enabled
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,44 +39,25 @@ class DemoDataset(Dataset):
     
     def _load_data(self):
         """Load demonstration data from HDF5 file."""
-        logger.info(f"Loading demos from {self.demos_path}")
+        if not os.path.exists(self.demos_path):
+            raise FileNotFoundError(f"Demo file not found: {self.demos_path}")
         
         with h5py.File(self.demos_path, 'r') as f:
-            episode_keys = [key for key in f.keys() if key.startswith('episode_')]
+            # Load observations
+            obs_data = f['observations'][:]
+            self.observations = obs_data.astype(np.float32)
             
-            for episode_key in episode_keys:
-                episode = f[episode_key]
-                obs = episode['observations'][:]
-                actions = episode['actions'][:]
-                
-                # Resize images if needed
-                if obs.shape[1:3] != self.image_size:
-                    obs_resized = []
-                    for img in obs:
-                        img_resized = torch.nn.functional.interpolate(
-                            torch.tensor(img).permute(2, 0, 1).unsqueeze(0).float(),
-                            size=self.image_size,
-                            mode='bilinear',
-                            align_corners=False
-                        ).squeeze(0).permute(1, 2, 0).numpy()
-                        obs_resized.append(img_resized)
-                    obs = np.array(obs_resized)
-                
-                self.observations.extend(obs)
-                self.actions.extend(actions)
+            # Load actions
+            action_data = f['actions'][:]
+            self.actions = action_data.astype(np.float32)
         
-        self.observations = np.array(self.observations)
-        self.actions = np.array(self.actions)
-        
-        logger.info(f"Loaded {len(self.observations)} samples")
-        logger.info(f"Observation shape: {self.observations.shape}")
-        logger.info(f"Action shape: {self.actions.shape}")
+        logger.info(f"Loaded {len(self.observations)} demonstration samples")
     
     def __len__(self):
         return len(self.observations)
     
     def __getitem__(self, idx):
-        obs = torch.tensor(self.observations[idx], dtype=torch.float32).permute(2, 0, 1)  # HWC -> CHW
+        obs = torch.tensor(self.observations[idx], dtype=torch.float32)
         action = torch.tensor(self.actions[idx], dtype=torch.float32)
         return obs, action
 
@@ -125,16 +97,16 @@ class PolicyNetwork(nn.Module):
 
 
 class BCTrainer:
-    """Behavior Cloning trainer."""
+    """Behavior Cloning trainer with GPU support and AMP."""
     
     def __init__(self, config: Dict[str, Any], demos_dir: str, output_dir: str):
         self.config = config
         self.demos_dir = demos_dir
         self.output_dir = output_dir
         
-        # Setup device
-        self.device = get_device()
-        optimize_for_gpu()
+        # Setup device and logging
+        self.device = get_device_from_config(config)
+        log_device_info(self.device, config)
         
         # Setup logging
         self.log_dir = Path(output_dir) / "logs" / "il"
@@ -146,25 +118,22 @@ class BCTrainer:
             image_size=tuple(config.get("image_size", [128, 128]))
         )
         
-        # Create data loader
+        # Create data loader with GPU optimizations
         batch_size = config.get("batch_size", 64)
+        dataloader_kwargs = get_dataloader_kwargs(config)
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4,
-            pin_memory=True if self.device.type == 'cuda' else False
+            **dataloader_kwargs
         )
         
         # Create model
         self._create_model()
         
-        # Setup optimizer
-        self.optimizer = optim.Adam(
-            self.model.parameters(),
-            lr=config.get("learning_rate", 1e-4),
-            weight_decay=config.get("weight_decay", 1e-5)
-        )
+        # Setup optimizer and scaler
+        self.optimizer = create_optimizer(self.model, config)
+        self.scaler = create_grad_scaler(config)
         
         # Setup loss function
         self.criterion = nn.MSELoss()
@@ -175,6 +144,7 @@ class BCTrainer:
         
         logger.info(f"BCTrainer initialized on {self.device}")
         logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        logger.info(f"AMP enabled: {amp_enabled(config)}")
     
     def _create_model(self):
         """Create the policy model."""
@@ -193,128 +163,179 @@ class BCTrainer:
         self.model = PolicyNetwork(
             encoder=self.encoder,
             hidden_dim=self.config.get("hidden_dim", 512),
-            action_dim=5  # [dx, dy, dz, dyaw, suction_toggle]
+            action_dim=self.config.get("action_dim", 5)
         )
         
-        self.model = self.model.to(self.device)
+        # Optimize for GPU
+        self.model = optimize_for_gpu(self.model, self.config)
+        
+        # Warmup model
+        warmup_model(self.model, self.config, (1, 3, 128, 128))
     
-    def train(self, dagger: bool = False):
-        """Train the behavior cloning model."""
-        logger.info("Starting behavior cloning training...")
-        
-        num_epochs = self.config.get("num_epochs", 100)
-        
-        for epoch in range(num_epochs):
-            self.epoch = epoch
-            train_loss = self._train_epoch()
-            
-            # Log progress
-            if epoch % 10 == 0:
-                logger.info(f"Epoch {epoch}/{num_epochs}, Loss: {train_loss:.6f}")
-            
-            # Save checkpoint
-            if epoch % 50 == 0 or train_loss < self.best_loss:
-                self._save_checkpoint(epoch, train_loss)
-                if train_loss < self.best_loss:
-                    self.best_loss = train_loss
-        
-        # Save final model
-        self._save_checkpoint(epoch, train_loss, is_final=True)
-        logger.info("Training completed!")
-    
-    def _train_epoch(self) -> float:
-        """Train for one epoch."""
+    def train_epoch(self) -> float:
+        """Train for one epoch with AMP support."""
         self.model.train()
         total_loss = 0.0
         num_batches = 0
         
-        for batch_idx, (obs, actions) in enumerate(tqdm(self.dataloader, desc=f"Epoch {self.epoch}")):
-            obs = obs.to(self.device)
-            actions = actions.to(self.device)
-            
-            # Forward pass
-            self.optimizer.zero_grad()
-            pred_actions = self.model(obs)
-            loss = self.criterion(pred_actions, actions)
-            
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            
-            total_loss += loss.item()
-            num_batches += 1
+        pbar = tqdm(self.dataloader, desc=f"Epoch {self.epoch}")
         
-        return total_loss / num_batches if num_batches > 0 else 0.0
+        for batch_idx, (obs, actions) in enumerate(pbar):
+            try:
+                # Move to device
+                obs = obs.to(self.device, non_blocking=True)
+                actions = actions.to(self.device, non_blocking=True)
+                
+                # Zero gradients
+                self.optimizer.zero_grad()
+                
+                # Forward pass with AMP
+                if amp_enabled(self.config):
+                    with torch.autocast("cuda"):
+                        pred_actions = self.model(obs)
+                        loss = self.criterion(pred_actions, actions)
+                    
+                    # Backward pass with scaling
+                    self.scaler.scale(loss).backward()
+                    
+                    # Gradient clipping
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    
+                    # Optimizer step
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    pred_actions = self.model(obs)
+                    loss = self.criterion(pred_actions, actions)
+                    
+                    # Backward pass
+                    loss.backward()
+                    
+                    # Gradient clipping
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    
+                    # Optimizer step
+                    self.optimizer.step()
+                
+                total_loss += loss.item()
+                num_batches += 1
+                
+                # Update progress bar
+                pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'avg_loss': f'{total_loss/num_batches:.4f}'
+                })
+                
+                # Log memory usage periodically
+                if batch_idx % 50 == 0:
+                    log_memory_usage(self.device, f"Batch {batch_idx}")
+                
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    logger.warning("OOM detected, handling...")
+                    self.config = handle_oom_error(e, self.config)
+                    # Recreate dataloader with smaller batch size
+                    dataloader_kwargs = get_dataloader_kwargs(self.config)
+                    self.dataloader = DataLoader(
+                        self.dataset,
+                        batch_size=self.config.get("batch_size", 32),
+                        shuffle=True,
+                        **dataloader_kwargs
+                    )
+                    continue
+                else:
+                    raise e
+        
+        return total_loss / num_batches
     
-    def _save_checkpoint(self, epoch: int, loss: float, is_final: bool = False):
+    def validate(self) -> float:
+        """Validate the model."""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for obs, actions in self.dataloader:
+                # Move to device
+                obs = obs.to(self.device, non_blocking=True)
+                actions = actions.to(self.device, non_blocking=True)
+                
+                # Forward pass with AMP
+                if amp_enabled(self.config):
+                    with torch.autocast("cuda"):
+                        pred_actions = self.model(obs)
+                        loss = self.criterion(pred_actions, actions)
+                else:
+                    pred_actions = self.model(obs)
+                    loss = self.criterion(pred_actions, actions)
+                
+                total_loss += loss.item()
+                num_batches += 1
+        
+        return total_loss / num_batches
+    
+    def save_checkpoint(self, epoch: int, loss: float, is_best: bool = False):
         """Save model checkpoint."""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': loss,
-            'config': self.config,
-            'timestamp': datetime.now().isoformat()
+            'config': self.config
         }
         
-        if is_final:
-            checkpoint_path = Path(self.output_dir) / "best_il_model.pth"
-        else:
-            checkpoint_path = Path(self.output_dir) / f"il_checkpoint_epoch_{epoch}.pth"
+        if self.scaler is not None:
+            checkpoint['scaler_state_dict'] = self.scaler.state_dict()
         
+        # Save regular checkpoint
+        checkpoint_path = Path(self.output_dir) / f"il_checkpoint_epoch_{epoch}.pth"
         torch.save(checkpoint, checkpoint_path)
-        logger.info(f"Checkpoint saved: {checkpoint_path}")
+        
+        # Save best checkpoint
+        if is_best:
+            best_path = Path(self.output_dir) / "il_checkpoint.pth"
+            torch.save(checkpoint, best_path)
+            logger.info(f"Saved best checkpoint with loss {loss:.4f}")
     
-    def evaluate(self, num_episodes: int = 10) -> Dict[str, float]:
-        """Evaluate the trained model."""
-        self.model.eval()
+    def train(self, epochs: int = 50):
+        """Train the model."""
+        logger.info(f"Starting training for {epochs} epochs")
         
-        total_loss = 0.0
-        num_samples = 0
+        for epoch in range(epochs):
+            self.epoch = epoch
+            
+            # Train epoch
+            train_loss = self.train_epoch()
+            
+            # Validate
+            val_loss = self.validate()
+            
+            # Check if best
+            is_best = val_loss < self.best_loss
+            if is_best:
+                self.best_loss = val_loss
+            
+            # Save checkpoint
+            self.save_checkpoint(epoch, val_loss, is_best)
+            
+            # Log progress
+            logger.info(
+                f"Epoch {epoch}: Train Loss: {train_loss:.4f}, "
+                f"Val Loss: {val_loss:.4f}, Best: {self.best_loss:.4f}"
+            )
+            
+            # Log memory usage
+            log_memory_usage(self.device, f"Epoch {epoch} End")
         
-        with torch.no_grad():
-            for obs, actions in self.dataloader:
-                obs = obs.to(self.device)
-                actions = actions.to(self.device)
-                
-                pred_actions = self.model(obs)
-                loss = self.criterion(pred_actions, actions)
-                
-                total_loss += loss.item() * obs.size(0)
-                num_samples += obs.size(0)
-        
-        avg_loss = total_loss / num_samples if num_samples > 0 else 0.0
-        
-        return {
-            'mse_loss': avg_loss,
-            'rmse_loss': np.sqrt(avg_loss),
-            'num_samples': num_samples
-        }
+        logger.info(f"Training completed. Best validation loss: {self.best_loss:.4f}")
 
 
-if __name__ == "__main__":
-    # Test BC trainer
-    config = {
-        "image_size": [128, 128],
-        "batch_size": 32,
-        "learning_rate": 1e-4,
-        "num_epochs": 10,
-        "hidden_dim": 256,
-        "cnn_encoder": {
-            "channels": [32, 64, 128, 256],
-            "kernel_sizes": [3, 3, 3, 3],
-            "strides": [2, 2, 2, 2],
-            "padding": [1, 1, 1, 1]
-        }
-    }
+def train_il_model(config: Dict[str, Any], demos_dir: str, output_dir: str) -> str:
+    """Train imitation learning model."""
+    trainer = BCTrainer(config, demos_dir, output_dir)
+    epochs = config.get("epochs", 50)
+    trainer.train(epochs)
     
-    trainer = BCTrainer(
-        config=config,
-        demos_dir="data/demos",
-        output_dir="data/checkpoints"
-    )
-    
-    trainer.train()
-    results = trainer.evaluate()
-    print(f"Evaluation results: {results}")
+    # Return path to best checkpoint
+    return str(Path(output_dir) / "il_checkpoint.pth")

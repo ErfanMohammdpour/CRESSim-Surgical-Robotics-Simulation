@@ -1,49 +1,35 @@
-# Demo generation configuration (optimized for GPU training)
-num_episodes: 1000  # more demos for better learning
-episode_length: 200  # longer episodes
+# Demo generation configuration
+num_episodes: 100
 num_workers: 4
+episode_length: 1000
+image_size: [128, 128]
 
 # Scripted policy parameters
 scripted_policy:
-  suction_radius: 0.05  # meters
-  approach_speed: 0.02  # m/s
-  suction_speed: 0.01   # m/s
-  exploration_noise: 0.1
-  success_threshold: 0.8
+  noise_level: 0.1
+  suction_threshold: 0.5
+  movement_scale: 0.05
+  suction_probability: 0.3
 
-# Noise injection
-noise:
-  position_std: 0.01  # meters
-  rotation_std: 0.05  # radians
-  action_dropout: 0.1  # probability of random action
-  temporal_noise: 0.05  # correlation between timesteps
-
-# Demo filtering and weighting
-filtering:
-  method: gmm  # gmm or percentile
-  gmm_components: 3
-  percentile_threshold: 0.7
-  min_episode_length: 100
-  max_episode_length: 1000
-
-# Quality metrics for weighting
-quality_metrics:
-  liquid_reduction_weight: 0.4
-  contaminant_reduction_weight: 0.3
-  smoothness_weight: 0.2
-  safety_weight: 0.1
-
-# Demo augmentation
-augmentation:
+# Demo quality filtering
+quality_filtering:
   enabled: true
-  rotation_range: [-15, 15]  # degrees
-  translation_range: [-0.02, 0.02]  # meters
-  brightness_range: [0.8, 1.2]
-  contrast_range: [0.8, 1.2]
+  min_liquid_reduction: 0.3
+  min_contaminant_reduction: 0.2
+  max_collision_rate: 0.1
+  max_safety_violations: 0.05
 
-# Storage format
-storage:
-  format: npz  # npz or hdf5
-  compression: true
-  include_metadata: true
-  save_videos: false  # set to true for debugging
+# Weight calculation
+weighting:
+  enabled: true
+  gmm_components: 2
+  features:
+    - liquid_reduction
+    - contaminant_reduction
+    - smoothness
+    - safety_compliance
+  weights:
+    liquid_reduction: 0.4
+    contaminant_reduction: 0.3
+    smoothness: 0.2
+    safety_compliance: 0.1
