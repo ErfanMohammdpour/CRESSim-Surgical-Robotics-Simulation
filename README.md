@@ -34,7 +34,13 @@ This repository trains a vision-based RL policy for autonomous endoscopic suctio
 - **Performance Tracking**: Comprehensive metrics for success evaluation
 - **Configurable Difficulty**: Adjustable parameters for curriculum learning
 
-## 🚀 Quick Start (from scratch)
+### Modular Pipeline System
+- **Data Handler**: `src/pipeline/data_handler.py` - Dataset download and processing
+- **Trainer**: `src/pipeline/trainer.py` - IL and RL model training
+- **Evaluator**: `src/pipeline/evaluator.py` - Model evaluation and reporting
+- **Pipeline**: `src/pipeline/pipeline.py` - Main orchestrator
+
+## 🚀 Quick Start (Complete Pipeline)
 
 ### 1. Setup Environment
 
@@ -51,102 +57,69 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-### 2. Bootstrap Everything
+### 2. Run Complete Pipeline
 
-Download datasets, clone simulator, and run tests:
-
-```powershell
-python manage.py bootstrap
-```
-
-This will:
-- ✅ Install Python dependencies
-- ✅ Download Kvasir-SEG dataset to `data/kvasir_seg/`
-- ✅ Clone CRESSim repository to `sim/CRESSim/`
-- ✅ Run comprehensive test suite
-- ✅ Generate HTML coverage reports
-
-### 3. Build Unity Environment (Optional)
-
-**Unity Build Steps:**
-
-1. Open Unity Hub
-2. Open the project at `sim/CRESSim/`
-3. Open the scene: `Assets/Scenes/SuctionEnv.unity`
-4. Go to File → Build Settings
-5. Select "PC, Mac & Linux Standalone" → "Windows"
-6. Click "Build" and save as `sim/CRESSim/Build/SuctionEnv.exe`
-
-**Note**: The system works perfectly with mock environments if Unity build is not available.
-
-### 4. Generate Demonstrations
-
-Create imperfect scripted demonstrations with quality filtering:
+Execute the complete surgical robotics pipeline with one command:
 
 ```powershell
-python manage.py demos
+python run_pipeline.py
 ```
 
-**What gets created:**
-- Raw demos saved to `data/demos/raw_*.npz`
-- GMM-filtered weights saved to `data/demos/weights.npz`
-- Demo statistics logged to `data/logs/demos.log`
+**What this does:**
+- ✅ Downloads Kvasir-SEG dataset from Kaggle
+- ✅ Processes and splits data into train/validation sets
+- ✅ Trains Imitation Learning (IL) model on training data
+- ✅ Trains Reinforcement Learning (RL) model on training data
+- ✅ Evaluates both models on validation data
+- ✅ Generates comprehensive performance reports
+- ✅ Cleans up temporary files automatically
 
-### 5. Train - Imitation Learning
+### 3. Advanced Usage
 
-Run weighted behavior cloning with safety integration:
+For custom parameters, you can modify the pipeline directly:
+
+```python
+from src.pipeline import CompletePipeline
+
+# Create pipeline with custom parameters
+pipeline = CompletePipeline(
+    kaggle_dataset="kvasir-seg",
+    output_dir="data"
+)
+
+# Run with custom training parameters
+success = pipeline.run_complete_pipeline(
+    il_epochs=100,
+    rl_timesteps=100000
+)
+```
+
+**Parameters:**
+- `kaggle_dataset`: Kaggle dataset name (default: kvasir-seg)
+- `output_dir`: Output directory (default: data)
+- `il_epochs`: IL training epochs (default: 50)
+- `rl_timesteps`: RL training timesteps (default: 50000)
+
+### 4. Results
+
+After completion, check the results:
 
 ```powershell
-python manage.py train-il
+# View evaluation results
+cat data/results/evaluation_results_*.json
+
+# View summary report
+cat data/results/summary_report_*.txt
+
+# Check model checkpoints
+ls data/checkpoints/
 ```
 
-**What to expect:**
-- Training logs in `data/logs/il_training.log`
-- Checkpoints saved to `data/checkpoints/il_*.pth`
-- TensorBoard logs in `data/logs/tensorboard/`
-- Model evaluation metrics
-
-### 6. Train - Reinforcement Learning
-
-Run PPO with integrated safety shield:
-
-```powershell
-python manage.py train-rl
-```
-
-**Advanced Features:**
-- ✅ Curriculum learning with adaptive difficulty
-- ✅ Safety shield prevents dangerous actions
-- ✅ Emergency stop on critical violations
-- ✅ Safety-first Pareto optimization for checkpoint selection
-- ✅ Real-time safety monitoring and logging
-
-### 7. Evaluate Model Performance
-
-Run comprehensive evaluation with video recording:
-
-```powershell
-python manage.py eval --checkpoint data/checkpoints/best_model.pth --render
-```
-
-**Outputs:**
-- 📹 `data/videos/eval_*.mp4` - Video recordings of episodes
-- 📊 `data/videos/metrics.json` - Quantitative performance metrics
-- 📈 `data/videos/plots/` - Performance visualization plots
-- 🛡️ Safety violation statistics and analysis
-
-### 8. Run Benchmark Comparisons
-
-Execute ablation studies and generate comparison results:
-
-```powershell
-python manage.py bench
-```
-
-**Comparisons:**
-- RL-only vs IL→RL vs IL→RL+Safety
-- Summary table: `data/benchmarks/comparison.csv`
-- Comparison plot: `data/benchmarks/comparison.png`
+**Output Files:**
+- `data/results/evaluation_results_*.json` - Detailed evaluation results
+- `data/results/summary_report_*.txt` - Human-readable summary
+- `data/checkpoints/il_model.pth` - Trained IL model
+- `data/checkpoints/rl_model.zip` - Trained RL model
 
 ## ⚙️ Configuration
 
