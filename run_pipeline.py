@@ -3,8 +3,8 @@
 Simple script to run the complete surgical robotics pipeline
 """
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 def main():
