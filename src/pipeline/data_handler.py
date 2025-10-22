@@ -53,8 +53,8 @@ class DataHandler:
             
             logger.info(f"Downloading from: {dataset_url}")
             
-            # Download the dataset
-            response = requests.get(dataset_url, stream=True)
+            # Download the dataset with SSL verification disabled
+            response = requests.get(dataset_url, stream=True, verify=False)
             response.raise_for_status()
             
             with open(zip_path, 'wb') as f:
