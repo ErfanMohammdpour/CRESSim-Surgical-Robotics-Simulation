@@ -12,14 +12,7 @@ Key features:
 - **Domain Randomization**: Lighting, textures, camera noise, and fluid properties
 - **Windows-First**: Complete CLI with no Makefiles required
 - **Reproducible**: Single Python command bootstrap and training
-
-## Requirements (Windows)
-
-- **Python 3.10+** with pip
-- **CUDA** (optional, for GPU acceleration with PyTorch)
-- **Unity Hub/Editor 2022.3 LTS** (for building the environment)
-- **Git** (for cloning CRESSim)
-
+  
 ## Quick Start (from scratch)
 
 ### 1. Setup Environment
