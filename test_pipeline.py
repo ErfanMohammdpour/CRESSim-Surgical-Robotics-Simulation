@@ -36,6 +36,8 @@ def test_imports():
         
     except ImportError as e:
         print(f"❌ Import failed: {e}")
+        print("💡 Try installing missing dependencies:")
+        print("   pip install opencv-python scikit-learn matplotlib seaborn")
         return False
 
 def test_instantiation():
