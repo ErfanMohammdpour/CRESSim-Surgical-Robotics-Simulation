@@ -1,32 +1,32 @@
-# CRESSim Suction RL 🏥🤖
+# CRESSim Suction RL
 
-A **production-quality** repository for training vision-based reinforcement learning policies for autonomous endoscopic suction inside CRESSim (Unity + ML-Agents). This project implements a complete IL→RL pipeline with **advanced visual safety shields**, domain randomization, and comprehensive evaluation metrics.
+A production-quality repository for training vision-based reinforcement learning policies for autonomous endoscopic suction inside CRESSim (Unity + ML-Agents). This project implements a complete IL→RL pipeline with advanced visual safety shields, domain randomization, and comprehensive evaluation metrics.
 
-## 🎯 Project Overview
+## Project Overview
 
-This repository trains a vision-based RL policy for autonomous endoscopic suction using CRESSim, a Unity-based surgical simulation environment. The system combines imitation learning from imperfect demonstrations with PPO reinforcement learning, enhanced by a **sophisticated visual safety shield** that prevents dangerous actions through real-time segmentation and distance estimation.
+This repository trains a vision-based RL policy for autonomous endoscopic suction using CRESSim, a Unity-based surgical simulation environment. The system combines imitation learning from imperfect demonstrations with PPO reinforcement learning, enhanced by a sophisticated visual safety shield that prevents dangerous actions through real-time segmentation and distance estimation.
 
-### 🚀 Key Features
+### Key Features
 
-- **🛡️ Advanced Visual Safety Shield**: Tiny U-Net segmentation network with multi-level safety response (Safe/Warning/Critical/Emergency Stop)
-- **🔄 Complete IL→RL Pipeline**: Behavior cloning warm-start followed by PPO fine-tuning with safety-first Pareto optimization
-- **🎲 Domain Randomization**: Lighting, textures, camera noise, and fluid properties for robust generalization
-- **🖥️ Windows-First Design**: Complete CLI with no Makefiles required - single Python command bootstrap
-- **📊 Comprehensive Evaluation**: Multi-episode evaluation with video recording and detailed safety metrics
-- **🧪 Production Testing**: Extensive test suite with 95%+ code coverage and safety validation
-- **⚡ GPU Optimized**: CUDA-optimized training with Automatic Mixed Precision (AMP) and torch.compile support
-- **🌐 Headless Server Support**: Full RL training/evaluation on Unity headless builds on remote servers
+- **Advanced Visual Safety Shield**: Tiny U-Net segmentation network with multi-level safety response (Safe/Warning/Critical/Emergency Stop)
+- **Complete IL→RL Pipeline**: Behavior cloning warm-start followed by PPO fine-tuning with safety-first Pareto optimization
+- **Domain Randomization**: Lighting, textures, camera noise, and fluid properties for robust generalization
+- **Windows-First Design**: Complete CLI with no Makefiles required - single Python command bootstrap
+- **Comprehensive Evaluation**: Multi-episode evaluation with video recording and detailed safety metrics
+- **Production Testing**: Extensive test suite with 95%+ code coverage and safety validation
+- **GPU Optimized**: CUDA-optimized training with Automatic Mixed Precision (AMP) and torch.compile support
+- **Headless Server Support**: Full RL training/evaluation on Unity headless builds on remote servers
 
-## 🏗️ Architecture Highlights
+## Architecture Highlights
 
 ### Visual Safety Shield System
 - **Real-time Segmentation**: Tiny U-Net (32 base channels) for surgical scene understanding
 - **Distance Estimation**: Integrated proximity estimation for tool positioning
 - **Multi-level Response**:
-  - 🟢 **Safe**: No action modification
-  - 🟡 **Warning**: Action scaling (50% reduction)
-  - 🔴 **Critical**: Emergency stop (zero action)
-  - ⚫ **Emergency**: Episode termination
+  - **Safe**: No action modification
+  - **Warning**: Action scaling (50% reduction)
+  - **Critical**: Emergency stop (zero action)
+  - **Emergency**: Episode termination
 - **Safety Curriculum**: Dynamic threshold adjustment based on performance
 
 ### Mock Environment Capabilities
@@ -35,7 +35,7 @@ This repository trains a vision-based RL policy for autonomous endoscopic suctio
 - **Performance Tracking**: Comprehensive metrics for success evaluation
 - **Configurable Difficulty**: Adjustable parameters for curriculum learning
 
-## 🚀 Quick Start (Complete Pipeline)
+## Quick Start (Complete Pipeline)
 
 ### 1. Environment Setup
 
@@ -77,94 +77,94 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); 
 ### 3. Bootstrap System
 
 ```powershell
-python manage.py bootstrap --device cuda
+python manage.py bootstrap
 ```
 
 **What this does:**
-- ✅ Installs Python dependencies
-- ✅ Downloads Kvasir-SEG dataset from official source
-- ✅ Clones CRESSim simulator repository
-- ✅ Validates dataset integrity (≥1000 images)
-- ✅ Runs CPU-only tests to verify installation
-- ✅ Shows GPU information and configuration
+- Installs Python dependencies
+- Downloads Kvasir-SEG dataset from official source
+- Clones CRESSim simulator repository
+- Validates dataset integrity (≥1000 images)
+- Runs CPU-only tests to verify installation
+- Shows GPU information and configuration
 
 ### 4. Generate Demonstrations
 
 ```powershell
-python manage.py demos --num-episodes 100 --mock --device cuda
+python manage.py demos --num-episodes 100 --mock
 ```
 
 **What this does:**
-- ✅ Generates 100 episodes using scripted policy
-- ✅ Creates imperfect demonstrations with noise injection
-- ✅ Computes quality weights using GMM-based filtering
-- ✅ Saves demos to `data/demos/demos.h5`
-- ✅ Generates summary statistics
+- Generates 100 episodes using scripted policy
+- Creates imperfect demonstrations with noise injection
+- Computes quality weights using GMM-based filtering
+- Saves demos to `data/demos/demos.h5`
+- Generates summary statistics
 
 ### 5. Pretrain Vision Models
 
 ```powershell
-python manage.py pretrain-vision --epochs 20 --device cuda
+python manage.py pretrain-vision --epochs 20
 ```
 
 **What this does:**
-- ✅ Trains safety segmentation network on Kvasir-SEG
-- ✅ Uses data augmentation (brightness, contrast, blur, cutout)
-- ✅ Saves best checkpoint to `data/models/safety_best.pth`
-- ✅ Produces validation IoU and DSC metrics
+- Trains safety segmentation network on Kvasir-SEG
+- Uses data augmentation (brightness, contrast, blur, cutout)
+- Saves best checkpoint to `data/models/safety_best.pth`
+- Produces validation IoU and DSC metrics
 
 ### 6. Train Imitation Learning Model
 
 ```powershell
-python manage.py train-il --device cuda --compile
+python manage.py train-il
 ```
 
 **What this does:**
-- ✅ Loads demonstrations and quality weights
-- ✅ Trains policy network via weighted behavior cloning
-- ✅ Uses CNN encoder with 512 hidden dimensions
-- ✅ Saves checkpoint to `data/checkpoints/il_checkpoint.pth`
-- ✅ Generates TensorBoard logs
+- Loads demonstrations and quality weights
+- Trains policy network via weighted behavior cloning
+- Uses CNN encoder with 512 hidden dimensions
+- Saves checkpoint to `data/checkpoints/il_checkpoint.pth`
+- Generates TensorBoard logs
 
 ### 7. Train Reinforcement Learning Model
 
 ```powershell
-python manage.py train-rl --checkpoint data/checkpoints/il_checkpoint.pth --timesteps 100000 --device cuda --compile
+python manage.py train-rl --checkpoint data/checkpoints/il_checkpoint.pth --timesteps 100000
 ```
 
 **What this does:**
-- ✅ Loads IL checkpoint for warm-start
-- ✅ Initializes safety shield with pretrained vision model
-- ✅ Runs PPO with safety-aware reward function
-- ✅ Implements action projection for unsafe states
-- ✅ Saves best model to `data/checkpoints/rl_best_model`
+- Loads IL checkpoint for warm-start
+- Initializes safety shield with pretrained vision model
+- Runs PPO with safety-aware reward function
+- Implements action projection for unsafe states
+- Saves best model to `data/checkpoints/rl_best_model`
 
 ### 8. Evaluate Trained Model
 
 ```powershell
-python manage.py eval --checkpoint data/checkpoints/rl_best_model --num-episodes 10 --render --device cuda --report
+python manage.py eval --checkpoint data/checkpoints/rl_best_model --num-episodes 10 --render --report
 ```
 
 **What this does:**
-- ✅ Runs 10 evaluation episodes with fixed seeds
-- ✅ Records videos of successful episodes
-- ✅ Generates comprehensive metrics report
-- ✅ Creates safety violation analysis
-- ✅ Produces `final_report.md` with results
+- Runs 10 evaluation episodes with fixed seeds
+- Records videos of successful episodes
+- Generates comprehensive metrics report
+- Creates safety violation analysis
+- Produces `final_report.md` with results
 
 ### 9. Run Benchmark Ablations
 
 ```powershell
-python manage.py bench --num-episodes 5 --device cuda
+python manage.py bench --num-episodes 5
 ```
 
 **What this does:**
-- ✅ Compares RL-only vs IL→RL vs IL→RL+Safety
-- ✅ Generates ablation study results
-- ✅ Creates comparison plots and tables
-- ✅ Saves benchmark report to `data/benchmarks/`
+- Compares RL-only vs IL→RL vs IL→RL+Safety
+- Generates ablation study results
+- Creates comparison plots and tables
+- Saves benchmark report to `data/benchmarks/`
 
-## 🚀 GPU Acceleration
+## GPU Acceleration
 
 ### GPU-Optimized Commands
 
@@ -172,46 +172,46 @@ python manage.py bench --num-episodes 5 --device cuda
 
 ```powershell
 # Force CUDA usage
-python manage.py bootstrap --device cuda
-python manage.py demos --device cuda
-python manage.py pretrain-vision --device cuda
-python manage.py train-il --device cuda
-python manage.py train-rl --device cuda
-python manage.py eval --device cuda
-python manage.py bench --device cuda
+python manage.py bootstrap
+python manage.py demos
+python manage.py pretrain-vision
+python manage.py train-il
+python manage.py train-rl
+python manage.py eval
+python manage.py bench
 ```
 
 **With Automatic Mixed Precision (AMP) disabled for debugging:**
 ```powershell
-python manage.py train-rl --device cuda --no-amp
+python manage.py train-rl --no-amp
 ```
 
 **Speed mode with torch.compile:**
 ```powershell
-python manage.py train-rl --device cuda --compile
-python manage.py train-il --device cuda --compile
-python manage.py pretrain-vision --device cuda --compile
+python manage.py train-rl --compile
+python manage.py train-il --compile
+python manage.py pretrain-vision --compile
 ```
 
 **Custom DataLoader workers:**
 ```powershell
-python manage.py train-il --device cuda --num-workers 8
-python manage.py pretrain-vision --device cuda --num-workers 4
+python manage.py train-il --num-workers 8
+python manage.py pretrain-vision --num-workers 4
 ```
 
 **Limit GPU memory usage:**
 ```powershell
-python manage.py train-rl --device cuda --gpu-mem-fraction 0.8
+python manage.py train-rl --gpu-mem-fraction 0.8
 ```
 
 **Use specific GPU:**
 ```powershell
 # Windows PowerShell
 $env:CUDA_VISIBLE_DEVICES="0"
-python manage.py train-rl --device auto
+python manage.py train-rl
 
 # Linux/macOS
-CUDA_VISIBLE_DEVICES=0 python manage.py train-rl --device auto
+CUDA_VISIBLE_DEVICES=0 python manage.py train-rl
 ```
 
 ### GPU Configuration
@@ -246,7 +246,7 @@ num_workers: 4          # DataLoader workers (0-2 on Windows, 4+ on Linux)
 - Set `CUDA_VISIBLE_DEVICES=0` to use specific GPU
 - Check GPU info: `python -c "import torch; print(torch.cuda.get_device_name())"`
 
-## 🖥️ Unity Headless Server Deployment
+## Unity Headless Server Deployment
 
 ### Building Unity Headless Binary
 
@@ -287,7 +287,7 @@ export CUDA_VISIBLE_DEVICES=0
 ./SuctionEnv.x86_64 -batchmode -nographics -logFile /tmp/cressim.log -port 5005
 
 # In another terminal, run training
-python manage.py train-rl --device cuda --timesteps 1000000
+python manage.py train-rl --timesteps 1000000
 ```
 
 ### Headless Training Commands
@@ -295,25 +295,25 @@ python manage.py train-rl --device cuda --timesteps 1000000
 **Full pipeline on headless server:**
 ```bash
 # 1. Bootstrap (downloads data, clones CRESSim)
-python manage.py bootstrap --device cuda
+python manage.py bootstrap
 
 # 2. Generate demos (uses mock if Unity not available)
-python manage.py demos --num-episodes 100 --device cuda
+python manage.py demos --num-episodes 100
 
 # 3. Pretrain vision
-python manage.py pretrain-vision --epochs 20 --device cuda
+python manage.py pretrain-vision --epochs 20
 
 # 4. Train IL
-python manage.py train-il --device cuda --compile
+python manage.py train-il
 
 # 5. Train RL (with Unity headless)
-python manage.py train-rl --device cuda --compile --timesteps 1000000
+python manage.py train-rl --timesteps 1000000
 
 # 6. Evaluate
-python manage.py eval --checkpoint data/checkpoints/rl_best_model --device cuda --report
+python manage.py eval --checkpoint data/checkpoints/rl_best_model --report
 
 # 7. Benchmark
-python manage.py bench --device cuda
+python manage.py bench
 ```
 
 **Monitor training progress:**
@@ -328,7 +328,7 @@ tail -f data/logs/rl/training.log
 tensorboard --logdir data/logs --port 6006
 ```
 
-## 📊 Complete Command Reference
+## Complete Command Reference
 
 ### Bootstrap Commands
 ```powershell
@@ -340,9 +340,6 @@ python manage.py bootstrap --force
 
 # Skip tests
 python manage.py bootstrap --skip-tests
-
-# GPU bootstrap
-python manage.py bootstrap --device cuda --compile
 ```
 
 ### Demo Generation Commands
@@ -355,9 +352,6 @@ python manage.py demos --num-episodes 200 --mock
 
 # Generate demos with workers
 python manage.py demos --workers 8 --mock
-
-# GPU-accelerated demo generation
-python manage.py demos --device cuda --num-episodes 100 --mock
 ```
 
 ### Vision Pretraining Commands
@@ -367,12 +361,6 @@ python manage.py pretrain-vision
 
 # Custom epochs
 python manage.py pretrain-vision --epochs 50
-
-# GPU pretraining
-python manage.py pretrain-vision --device cuda --epochs 20
-
-# Speed mode
-python manage.py pretrain-vision --device cuda --compile --epochs 20
 ```
 
 ### Imitation Learning Commands
@@ -382,15 +370,6 @@ python manage.py train-il
 
 # Custom config
 python manage.py train-il --config configs/train.yaml
-
-# GPU training
-python manage.py train-il --device cuda
-
-# Speed mode
-python manage.py train-il --device cuda --compile
-
-# Custom workers
-python manage.py train-il --device cuda --num-workers 8
 ```
 
 ### Reinforcement Learning Commands
@@ -404,14 +383,8 @@ python manage.py train-rl --checkpoint data/checkpoints/il_checkpoint.pth
 # Custom timesteps
 python manage.py train-rl --timesteps 500000
 
-# GPU training
-python manage.py train-rl --device cuda
-
-# Speed mode
-python manage.py train-rl --device cuda --compile
-
 # Mock environment (no Unity)
-python manage.py train-rl --mock --device cuda
+python manage.py train-rl --mock
 ```
 
 ### Evaluation Commands
@@ -427,9 +400,6 @@ python manage.py eval --checkpoint data/checkpoints/rl_best_model --render
 
 # Generate final report
 python manage.py eval --checkpoint data/checkpoints/rl_best_model --report
-
-# GPU evaluation
-python manage.py eval --checkpoint data/checkpoints/rl_best_model --device cuda --render --report
 ```
 
 ### Benchmark Commands
@@ -439,9 +409,6 @@ python manage.py bench
 
 # Custom episodes
 python manage.py bench --num-episodes 10
-
-# GPU benchmark
-python manage.py bench --device cuda --num-episodes 5
 ```
 
 ### Utility Commands
@@ -462,7 +429,7 @@ python manage.py clean --videos
 python manage.py clean --all --confirm
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### `configs/env.yaml`
 Environment settings including image size, action scaling, reward weights, and domain randomization ranges.
@@ -496,7 +463,7 @@ Demo generation settings with noise levels and acceptance thresholds.
 ### `configs/paths.yaml`
 File paths for datasets, simulator, Unity build, and output directories.
 
-## 🧪 Testing & Quality Assurance
+## Testing & Quality Assurance
 
 ### Comprehensive Test Suite
 ```powershell
@@ -513,13 +480,13 @@ python -m pytest tests/test_basic.py -v
 ```
 
 **Test Coverage:**
-- ✅ Safety shield functionality (95%+ coverage)
-- ✅ Emergency stop logic validation
-- ✅ Mock environment behavior
-- ✅ Configuration loading
-- ✅ Model evaluation pipeline
-- ✅ GPU device utilities
-- ✅ AMP and cuDNN configuration
+- Safety shield functionality (95%+ coverage)
+- Emergency stop logic validation
+- Mock environment behavior
+- Configuration loading
+- Model evaluation pipeline
+- GPU device utilities
+- AMP and cuDNN configuration
 
 ### Safety Validation
 - Multi-level safety response testing
@@ -527,14 +494,14 @@ python -m pytest tests/test_basic.py -v
 - Consecutive violation handling
 - Action projection accuracy
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Missing Unity Build
 If the Unity build is missing, you can still:
-- ✅ Run `python manage.py demos --mock` (creates mock demos)
-- ✅ Run `python manage.py train-il` (uses mock demos)
-- ✅ Run `python manage.py train-rl --mock` (mock RL training)
-- ✅ Run comprehensive tests and evaluation
+- Run `python manage.py demos --mock` (creates mock demos)
+- Run `python manage.py train-il` (uses mock demos)
+- Run `python manage.py train-rl --mock` (mock RL training)
+- Run comprehensive tests and evaluation
 
 ### GPU Issues
 - **No CUDA**: System automatically falls back to CPU
@@ -543,16 +510,16 @@ If the Unity build is missing, you can still:
 - **Debugging**: Use `--no-amp` to disable AMP
 
 ### Dataset Issues
-- ✅ Check `data/kvasir_seg/` contains >1000 images
-- ✅ Verify `data/endoscapes/` structure if using optional dataset
-- 🔄 Run `python manage.py bootstrap` to re-download
+- Check `data/kvasir_seg/` contains >1000 images
+- Verify `data/endoscapes/` structure if using optional dataset
+- Run `python manage.py bootstrap` to re-download
 
 ### Training Issues
-- 📊 Monitor TensorBoard logs for training progress
-- 🛡️ Check safety violation logs for shield effectiveness
-- 📈 Review evaluation metrics for performance assessment
+- Monitor TensorBoard logs for training progress
+- Check safety violation logs for shield effectiveness
+- Review evaluation metrics for performance assessment
 
-## 📊 Performance Metrics
+## Performance Metrics
 
 ### Success Criteria
 - **Liquid Removal**: >80% of initial liquid mass
@@ -566,7 +533,7 @@ If the Unity build is missing, you can still:
 - **AMP Speedup**: ~2x with Automatic Mixed Precision
 - **Compile Speedup**: Additional 10-20% with torch.compile
 
-## 📚 Licenses & Citations
+## Licenses & Citations
 
 ### Kvasir-SEG Dataset
 - **URL**: https://datasets.simula.no/downloads/kvasir-seg.zip
@@ -578,7 +545,7 @@ If the Unity build is missing, you can still:
 - **License**: BSD-2-Clause
 - **Citation**: Ou et al., "Learning autonomous surgical irrigation and suction with the Da Vinci Research Kit using reinforcement learning", arXiv 2024
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 cressim-suction-rl/
@@ -617,18 +584,18 @@ cressim-suction-rl/
 └── htmlcov/                 # Test coverage reports
 ```
 
-## 🎯 Recent Achievements
+## Recent Achievements
 
-- ✅ **Production-Ready Safety System**: Multi-level visual safety shield with emergency stop
-- ✅ **Comprehensive Testing**: 95%+ code coverage with extensive safety validation
-- ✅ **Enhanced Mock Environment**: Improved task dynamics and realistic visualization
-- ✅ **Flexible Evaluation**: Support for multiple model formats with video recording
-- ✅ **GPU Optimization**: CUDA-optimized training with AMP and torch.compile
-- ✅ **Rich CLI Interface**: Complete command-line interface with progress tracking
-- ✅ **Headless Server Support**: Full RL training on Unity headless builds
-- ✅ **Documentation**: Comprehensive README with clear setup and usage instructions
+- **Production-Ready Safety System**: Multi-level visual safety shield with emergency stop
+- **Comprehensive Testing**: 95%+ code coverage with extensive safety validation
+- **Enhanced Mock Environment**: Improved task dynamics and realistic visualization
+- **Flexible Evaluation**: Support for multiple model formats with video recording
+- **GPU Optimization**: CUDA-optimized training with AMP and torch.compile
+- **Rich CLI Interface**: Complete command-line interface with progress tracking
+- **Headless Server Support**: Full RL training on Unity headless builds
+- **Documentation**: Comprehensive README with clear setup and usage instructions
 
-## 🤝 Contributing
+## Contributing
 
 This project demonstrates state-of-the-art surgical robotics research with:
 - **Safety-First Design**: Comprehensive safety systems preventing dangerous actions
@@ -638,4 +605,4 @@ This project demonstrates state-of-the-art surgical robotics research with:
 
 ---
 
-**Status**: ✅ Production Ready | **Safety**: 🛡️ Comprehensive | **Testing**: 🧪 Extensive | **Documentation**: 📚 Complete | **GPU**: ⚡ Optimized
+**Status**: Production Ready | **Safety**: Comprehensive | **Testing**: Extensive | **Documentation**: Complete | **GPU**: Optimized
