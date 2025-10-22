@@ -65,6 +65,18 @@ class DataHandler:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(self.raw_data_dir)
             
+            # Copy to kvasir_seg directory for consistency
+            extracted_dir = self.raw_data_dir / "Kvasir-SEG"
+            target_dir = self.output_dir / "kvasir_seg" / "Kvasir-SEG"
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            
+            if extracted_dir.exists():
+                import shutil
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                shutil.copytree(extracted_dir, target_dir)
+                logger.info(f"📁 Dataset copied to: {target_dir}")
+            
             # Remove zip file
             zip_path.unlink()
             
@@ -72,19 +84,19 @@ class DataHandler:
             return True
             
         except ImportError:
-            logger.warning("Required packages not available, trying alternative download...")
-            return self._download_alternative()
+            logger.error("❌ Required packages not available!")
+            logger.error("Please install: pip install requests")
+            return False
         except Exception as e:
-            logger.error(f"Official download failed: {e}")
-            return self._download_alternative()
+            logger.error(f"❌ Official download failed: {e}")
+            logger.error("Please check your internet connection and try again")
+            return False
     
     def _download_alternative(self) -> bool:
-        """Alternative download method"""
-        logger.info("🔄 Using alternative download method...")
-        
-        # Create sample dataset structure
-        self._create_sample_dataset()
-        return True
+        """Alternative download method - DISABLED"""
+        logger.error("❌ Synthetic data generation is disabled!")
+        logger.error("Pipeline requires real Kvasir-SEG dataset")
+        return False
     
     def _create_sample_dataset(self):
         """Create sample dataset for testing"""
@@ -329,10 +341,10 @@ class DataHandler:
             images_dir = real_images_dir
             masks_dir = real_masks_dir
         else:
-            logger.info("📁 Using synthetic dataset")
-            # Get all image files
-            images_dir = self.raw_data_dir / "images"
-            masks_dir = self.raw_data_dir / "masks"
+            logger.error("❌ Real dataset not found! Please ensure Kvasir-SEG dataset is available.")
+            logger.error("Expected location: data/kvasir_seg/Kvasir-SEG/")
+            logger.error("Download from: https://datasets.simula.no/downloads/kvasir-seg.zip")
+            return False
         
         image_files = list(images_dir.glob("*.jpg"))
         mask_files = list(masks_dir.glob("*.jpg"))

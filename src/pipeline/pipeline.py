@@ -64,8 +64,8 @@ class CompletePipeline:
             # Step 6: Print results
             self.evaluator.print_results(results)
             
-            # Step 7: Cleanup
-            self.cleanup_temp_files()
+            # Step 7: Keep data for future use (no cleanup)
+            logger.info("📁 Data preserved for future use")
             
             logger.info("🎉 Complete pipeline finished successfully!")
             return True
