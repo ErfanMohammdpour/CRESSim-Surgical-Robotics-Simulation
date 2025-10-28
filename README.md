@@ -586,7 +586,6 @@ cressim-suction-rl/
 
 ## Recent Achievements
 
-<<<<<<< HEAD
 - **Production-Ready Safety System**: Multi-level visual safety shield with emergency stop
 - **Comprehensive Testing**: 95%+ code coverage with extensive safety validation
 - **Enhanced Mock Environment**: Improved task dynamics and realistic visualization
@@ -616,7 +615,7 @@ This project demonstrates state-of-the-art surgical robotics research with:
 - ✅ **Rich CLI Interface**: Complete command-line interface with progress tracking
 - ✅ **Headless Server Support**: Full RL training on Unity headless builds
 - ✅ **Documentation**: Comprehensive README with clear setup and usage instructions
->>>>>>> 43188fa808d848d76822849e361079e76ec4feea
+
 
 
 
